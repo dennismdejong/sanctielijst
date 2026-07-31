@@ -42,23 +42,31 @@ def _result_paragraphs(result: dict, styles) -> list:
         un_id = raw.get("united_nations_id")
         if un_id:
             parts.append(Paragraph(f"VN-id: {_escape(un_id)}", styles["body"]))
-        aliases = [a["whole_name"] for a in raw.get("aliases", []) if a.get("whole_name")]
+        raw_aliases = raw.get("aliases", [])
+        aliases = [a if isinstance(a, str) else a.get("whole_name", "") for a in raw_aliases]
+        aliases = [a for a in aliases if a]
         if aliases:
             parts.append(Paragraph(f"Aliassen: {_escape(', '.join(aliases[:5]))}", styles["body"]))
         for birth in raw.get("birthdates", []):
+            if not isinstance(birth, dict):
+                continue
             when = birth.get("date") or birth.get("year")
             where = birth.get("place") or birth.get("city")
             value = " ".join(filter(None, [when, where]))
             if value:
                 parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(value)}", styles["body"]))
         for country in raw.get("citizenships", []):
+            if not isinstance(country, dict):
+                continue
             nationality = country.get("description") or country.get("iso2")
             if nationality:
                 parts.append(Paragraph(f"Nationaliteit: {_escape(nationality)}", styles["body"]))
-        function = next((a.get("function") for a in raw.get("aliases", []) if a.get("function")), "")
+        function = entity.get("function") or next((a.get("function", "") for a in raw_aliases if isinstance(a, dict) and a.get("function")), "")
         if function:
             parts.append(Paragraph(f"Functie: {_escape(function)}", styles["body"]))
         for reg in raw.get("regulations", []):
+            if not isinstance(reg, dict):
+                continue
             title = reg.get("number_title") or reg.get("programme")
             url = reg.get("publication_url")
             value = " — ".join(filter(None, [title, url]))
