@@ -98,7 +98,7 @@ Gewichten (alleen kenmerken meetellen die de gebruiker invulde):
 
 | Kenmerk | Gewicht | Scoring |
 |---|---|---|
-| Naam | 60% | rapidfuzz `token_set_ratio` over alle aliassen; `strong`-aliassen ×1,2. Beste alias-score genomen. |
+| Naam | 60% | rapidfuzz `token_set_ratio` over alle aliassen; `strong`-aliassen ×1,2. Beste alias-score genomen. Bevat de query alle tokens van een alias (token-subset, accent-gefold) → 100. |
 | Geboortejaar | 20% | exact = 100; ±1 jaar = 75; ±2 jaar = 50; anders 0. |
 | Nationaliteit | 10% | ISO-landcode exact = 100; anders 0. |
 | Geboorteplaats | 10% | token-overlap (`token_set_ratio`) tegen alle birthdate-plaatsen; beste score. |
