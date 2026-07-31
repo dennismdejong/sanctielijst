@@ -1,0 +1,126 @@
+from pathlib import Path
+import json
+
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+
+
+def make_entity(eu_ref, whole_name, subject_type="person", year=None, country=None, place=None):
+    return {
+        "logical_id": eu_ref,
+        "eu_reference_number": eu_ref,
+        "united_nations_id": "",
+        "designation_date": "2022-01-01",
+        "subject_type": subject_type,
+        "aliases": [{"whole_name": whole_name, "first_name": "", "last_name": "", "strong": True, "function": "Diplomat", "title": ""}],
+        "citizenships": [{"iso2": country, "description": country}] if country else [],
+        "birthdates": [{"date": "", "year": year, "year_from": None, "year_to": None, "city": "", "place": place, "iso2": country or "", "country": country or ""}] if year or place else [],
+        "addresses": [],
+        "identifications": [],
+        "regulations": [{"number_title": "2022/123", "publication_date": "2022-02-01", "programme": "XX", "publication_url": "https://eur-lex.europa.eu/x"}],
+        "remarks": [],
+    }
+
+
+ENTITIES = [
+    make_entity("EU.471.56", "Abdul Hai Hazem Abdul Qader", year=1971, country="AF", place="Kabul"),
+    make_entity("EU.2", "Rosneft", subject_type="enterprise", country="RU"),
+]
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "eu_sample.xml"
+
+
+def test_health():
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/health").json() == {"status": "ok"}
+
+
+def test_status_fields():
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/status").json()
+    assert data["entity_count"] == 2
+    assert data["opensanctions_active"] is False
+    assert "source" in data
+
+
+def test_search_returns_eu_result():
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/search", params={"name": "Abdul Hai Hazem"}).json()
+    assert data["results"]
+    first = data["results"][0]
+    assert first["source"] == "eu"
+    assert first["eu"]["total_score"] == 100
+    assert first["entity"]["eu_reference_number"] == "EU.471.56"
+    assert any(d["feature"] == "naam" for d in first["eu"]["details"])
+
+
+def test_search_birth_year_boosts():
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/search", params={"name": "Abdul", "birth_year": 1971}).json()
+    scores = [r["score"] for r in data["results"] if r["source"] == "eu"]
+    assert scores and scores[0] == 100
+
+
+def test_search_entity_type_filter():
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/search", params={"name": "Rosneft", "entity_type": "enterprise"}).json()
+    assert any(r["source"] == "eu" for r in data["results"])
+
+
+def test_search_requires_name():
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/search")
+    assert resp.status_code == 422
+
+
+def test_search_with_opensanctions_merges(monkeypatch):
+    import app.main as main
+
+    fake_os = [
+        {
+            "id": "NK-x",
+            "caption": "Abdul Qader",
+            "schema": "Person",
+            "score": 0.8,
+            "match": True,
+            "explanations": {"name_match": {"score": 0.8}},
+            "datasets": ["eu_fsf"],
+            "properties": {},
+            "url": "https://opensanctions.org/entities/NK-x",
+        }
+    ]
+    monkeypatch.setattr(main.opensanctions, "match_opensanctions", lambda *a, **k: fake_os)
+    client = TestClient(create_app(entities=ENTITIES, os_api_key="KEY"))
+    data = client.get("/api/search", params={"name": "Abdul Qader"}).json()
+    sources = {r["source"] for r in data["results"]}
+    assert sources == {"eu", "opensanctions"}
+    os_result = [r for r in data["results"] if r["source"] == "opensanctions"][0]
+    assert os_result["score"] == 80
+    assert os_result["opensanctions"]["url"] == "https://opensanctions.org/entities/NK-x"
+
+
+def test_search_opensanctions_failure_adds_warning(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main.opensanctions, "match_opensanctions", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    client = TestClient(create_app(entities=ENTITIES, os_api_key="KEY"))
+    data = client.get("/api/search", params={"name": "Abdul Hai Hazem"}).json()
+    assert data["results"]
+    assert any("OpenSanctions" in w for w in data["warnings"])
+
+
+def test_search_no_match_returns_empty():
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/search", params={"name": "Zzq Qqxx"}).json()
+    assert data["results"] == []
+
+
+def test_index_serves_html(tmp_path, monkeypatch):
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<h1>hi</h1>")
+    client = TestClient(create_app(entities=ENTITIES, static_dir=static))
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.text == "<h1>hi</h1>"
