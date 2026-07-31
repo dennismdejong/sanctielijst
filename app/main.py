@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import ingest, matcher, opensanctions
+from . import pep_index
 
 load_dotenv()
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
+PEP_ROOT = Path(__file__).resolve().parent.parent / "data" / "pep"
 
 
 def _serialize_eu_result(result: matcher.EuMatchResult, query_name: str) -> dict:
@@ -69,11 +71,55 @@ def _serialize_os_result(result: dict) -> dict:
     }
 
 
+def _pep_enabled(pep_root: Path) -> bool:
+    env = os.environ.get(pep_index.INDEX_ENV)
+    if env is not None:
+        return env.strip().lower() not in ("0", "false", "no")
+    return pep_root.exists()
+
+
+def _serialize_pep_result(result: dict, index: dict) -> dict:
+    entity = result["entity"]
+    ds_meta = index.get("datasets_meta", {})
+    datasets = []
+    for ds_id in entity["datasets"]:
+        meta = ds_meta.get(ds_id, {})
+        datasets.append({
+            "id": ds_id,
+            "title": meta.get("title") or ds_id,
+            "country": meta.get("country", ""),
+            "url": f"https://www.opensanctions.org/datasets/{ds_id}/",
+        })
+    return {
+        "source": "pep",
+        "score": result["score"],
+        "entity": {
+            "name": entity["caption"],
+            "schema": entity["schema"],
+            "birth_dates": entity["birth_dates"],
+            "birth_places": entity["birth_places"],
+            "citizenships": entity["citizenships"],
+            "political": entity["political"],
+            "topics": entity["topics"],
+        },
+        "pep": {
+            "id": entity["id"],
+            "url": f"https://opensanctions.org/entities/{entity['id']}",
+            "datasets": datasets,
+            "matched_name": result["matched_name"],
+            "details": result["details"],
+        },
+        "eu": None,
+        "opensanctions": None,
+    }
+
+
 def create_app(
     entities: list[dict] | None = None,
     os_api_key: str | None = None,
     cache_dir: Path = CACHE_DIR,
     static_dir: Path = STATIC_DIR,
+    pep_root: Path = PEP_ROOT,
 ) -> FastAPI:
     if entities is None:
         entities, meta = ingest.load_index(cache_dir)
@@ -81,10 +127,11 @@ def create_app(
         meta = {}
     if os_api_key is None:
         os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
-    state = {"entities": entities, "meta": meta}
+    pep = pep_index.load_or_build_index(pep_root) if _pep_enabled(pep_root) else None
+    state = {"entities": entities, "meta": meta, "pep": pep}
     opensanctions_active = bool(os_api_key)
 
-    app = FastAPI(title="Sanctielijst Zoeker")
+    app = FastAPI(title="Compliance Zoeker")
 
     @app.get("/")
     def index():
@@ -97,6 +144,7 @@ def create_app(
     def _status() -> dict:
         cached_at = state["meta"].get("cached_at")
         age_hours = round((time.time() - cached_at) / 3600, 1) if cached_at else None
+        pep = state["pep"]
         return {
             "cached_at": cached_at,
             "generated_at": state["meta"].get("generated_at"),
@@ -104,6 +152,12 @@ def create_app(
             "data_age_hours": age_hours,
             "opensanctions_active": opensanctions_active,
             "source": state["meta"].get("source", "unknown"),
+            "pep_index": {
+                "enabled": pep is not None,
+                "entity_count": len(pep.get("entities", [])) if pep else 0,
+                "datasets_count": len(pep.get("datasets", {})) if pep else 0,
+                "source": pep.get("source") if pep else None,
+            },
         }
 
     @app.get("/api/status")
@@ -143,6 +197,16 @@ def create_app(
         warnings = []
         for r in matcher.search_eu(state["entities"], query):
             results.append(_serialize_eu_result(r, query.name))
+        if state["pep"] is not None:
+            for r in pep_index.search_pep(
+                state["pep"],
+                query.name,
+                query.birth_year,
+                query.nationality,
+                query.birth_place,
+                query.entity_type,
+            ):
+                results.append(_serialize_pep_result(r, state["pep"]))
         if opensanctions_active:
             try:
                 for r in opensanctions.match_opensanctions(

@@ -151,3 +151,69 @@ def test_index_serves_html(tmp_path):
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.text == "<h1>hi</h1>"
+
+
+import pytest
+
+from app import pep_index
+
+
+@pytest.fixture(autouse=True)
+def pep_disabled(monkeypatch):
+    monkeypatch.setenv(pep_index.INDEX_ENV, "0")
+
+
+def _write_pep_fixture(root):
+    import json
+    for ds, entities in [
+        ("ar_parliament", [
+            {"id": "NK-x", "caption": "JORGE FERNANDEZ", "schema": "Person", "target": True, "datasets": ["ar_parliament"],
+             "properties": {"birthDate": ["1965-03-01"], "citizenship": ["ar"], "political": ["PRIMERO SAN LUIS"], "topics": ["role.pep"]}},
+        ]),
+    ]:
+        p = root / ds / "entities.ftm.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as fh:
+            for e in entities:
+                fh.write(json.dumps(e) + "\n")
+    (root / "datasets.json").write_text(json.dumps({"ar_parliament": {"title": "Argentina Members of Parliament", "publisher": "HCDN", "country": "ar", "official": True, "url": "https://parlament.ar"}}))
+
+
+def test_status_pep_disabled():
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/status").json()
+    assert data["pep_index"]["enabled"] is False
+
+
+def test_status_pep_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    data = client.get("/api/status").json()
+    assert data["pep_index"]["enabled"] is True
+    assert data["pep_index"]["entity_count"] == 1
+    assert data["pep_index"]["datasets_count"] == 1
+
+
+def test_search_pep_hit_with_sources(tmp_path, monkeypatch):
+    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    data = client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()
+    pep_results = [r for r in data["results"] if r["source"] == "pep"]
+    assert pep_results
+    first = pep_results[0]
+    assert first["score"] == 100
+    assert first["pep"]["id"] == "NK-x"
+    assert first["pep"]["url"] == "https://opensanctions.org/entities/NK-x"
+    assert first["pep"]["datasets"][0]["id"] == "ar_parliament"
+    assert first["pep"]["datasets"][0]["title"] == "Argentina Members of Parliament"
+    assert first["pep"]["datasets"][0]["country"] == "ar"
+
+
+def test_search_pep_entity_type_filter(tmp_path, monkeypatch):
+    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    data = client.get("/api/search", params={"name": "JORGE FERNANDEZ", "entity_type": "enterprise"}).json()
+    assert not [r for r in data["results"] if r["source"] == "pep"]
