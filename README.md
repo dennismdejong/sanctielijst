@@ -57,4 +57,9 @@ Download alle individuele PEP-bronnen (~0.8 GB, `entities.ftm.json` per bron) na
 0 4 * * 1 cd /pad/naar/sanctielijst && .venv/bin/python scripts/update_pep.py --once >> data/pep/update.log 2>&1
 ```
 
-**Docker:** de service `pep-downloader` in `docker-compose.yml` draait hetzelfde script in loop-modus (`--interval 168`) met data op een volume.
+**Container (podman-compose):** de service `pep-downloader` in `docker-compose.yml` draait hetzelfde script in loop-modus (`--interval 168`) met data op een volume. Zonder Docker kun je dit draaien met podman/podman-compose:
+
+```bash
+podman-compose up -d --build
+podman logs -f pep-downloader
+```
