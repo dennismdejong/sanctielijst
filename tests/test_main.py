@@ -283,3 +283,16 @@ def test_status_source_from_manifest(tmp_path):
     assert data["source"] == "ok"
     assert data["generated_at"] == "2026-07-28T11:43:32+02:00"
     assert data["entity_count"] == 2
+
+
+def test_startup_corrupt_xml_boots_with_error(tmp_path):
+    import json
+
+    (tmp_path / "eu_sanctions.xml").write_bytes(b"<garbage")
+    (tmp_path / "manifest.json").write_text(json.dumps({"status": "ok"}))
+    client = TestClient(create_app(eu_root=tmp_path))
+    resp = client.get("/api/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] == "error"
+    assert data["entity_count"] == 0

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -40,9 +41,19 @@ def _sha1(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download_xml(url: str, dest: Path, timeout: int = TIMEOUT, retries: int = 1) -> None:
+def _validate_xml(data: bytes) -> None:
+    parse_export(data)
+
+
+def download_xml(
+    url: str,
+    dest: Path,
+    timeout: int = TIMEOUT,
+    retries: int = 1,
+    validate: Callable[[bytes], None] | None = None,
+) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_suffix(dest.suffix + ".part")
+    part = dest.parent / f"{dest.name}.{uuid.uuid4().hex}.part"
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -53,6 +64,8 @@ def download_xml(url: str, dest: Path, timeout: int = TIMEOUT, retries: int = 1)
                     for chunk in resp.iter_content(chunk_size=65536):
                         if chunk:
                             fh.write(chunk)
+            if validate is not None:
+                validate(part.read_bytes())
             part.replace(dest)
             return
         except Exception as exc:
@@ -77,7 +90,7 @@ def load_eu_manifest(root_dir: Path) -> dict:
 def _write_manifest(root_dir: Path, manifest: dict) -> None:
     root_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = root_dir / MANIFEST_FILENAME
-    tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+    tmp = manifest_path.with_suffix(manifest_path.suffix + f".{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(manifest, indent=2))
     os.replace(tmp, manifest_path)
 
@@ -92,7 +105,6 @@ def refresh_eu(
     last_modified = headers["last_modified"]
     dest = root_dir / XML_FILENAME
     manifest = load_eu_manifest(root_dir)
-    stats = {"downloaded": 0, "skipped": 0, "failed": 0}
     skip = (
         not force
         and manifest.get("last_modified") == last_modified
@@ -105,6 +117,7 @@ def refresh_eu(
         result["stats"] = {"downloaded": 0, "skipped": 1, "failed": 0}
         if logger:
             logger("EU-lijst: overgeslagen (ongewijzigd)")
+        _write_manifest(root_dir, result)
         return result
     if dry_run:
         result = {
@@ -117,7 +130,7 @@ def refresh_eu(
             logger("EU-lijst: zou downloaden")
         return result
     try:
-        download_xml(EU_XML_URL, dest)
+        download_xml(EU_XML_URL, dest, validate=_validate_xml)
         content = dest.read_bytes()
         result = {
             "updated_at": datetime.now(timezone.utc).isoformat(),

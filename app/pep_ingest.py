@@ -1,6 +1,7 @@
 import hashlib
 import os
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -63,7 +64,7 @@ def _sha1(path: Path) -> str:
 
 def download_artifact(url: str, dest: Path, checksum: str, timeout: int = TIMEOUT, retries: int = 1) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_suffix(dest.suffix + ".part")
+    part = dest.parent / f"{dest.name}.{uuid.uuid4().hex}.part"
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -176,7 +177,7 @@ def refresh_pep(
     if not dry_run:
         root_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = root_dir / MANIFEST_FILENAME
-        tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+        tmp = manifest_path.with_suffix(manifest_path.suffix + f".{uuid.uuid4().hex}.tmp")
         tmp.write_text(json.dumps(result, indent=2))
         os.replace(tmp, manifest_path)
         write_datasets_meta(index, root_dir)
@@ -212,6 +213,6 @@ def write_datasets_meta(index: dict, root_dir: Path) -> None:
                 return
         except Exception:
             pass
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
     os.replace(tmp, path)

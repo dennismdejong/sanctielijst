@@ -38,7 +38,7 @@ def _data_age_hours(downloaded_at: str | None) -> float | None:
         return None
     try:
         parsed = datetime.fromisoformat(downloaded_at)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
     return round((datetime.now(timezone.utc) - parsed).total_seconds() / 3600, 1)
 
@@ -157,8 +157,14 @@ def create_app(
     if entities is None:
         xml_path = eu_root / eu_ingest.XML_FILENAME
         if xml_path.exists():
-            entities = ingest.parse_export(xml_path.read_bytes())
-            meta.setdefault("status", "ok")
+            try:
+                entities = ingest.parse_export(xml_path.read_bytes())
+            except Exception:
+                logger.exception("EU XML ongeldig")
+                entities = []
+                meta["status"] = "error"
+            else:
+                meta.setdefault("status", "ok")
         else:
             entities = []
             meta.setdefault("status", "missing")

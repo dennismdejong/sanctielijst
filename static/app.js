@@ -16,6 +16,15 @@ function chip(label, tone = "ok") {
   return `<span class="chip chip-${tone}">${escapeHtml(label)}</span>`;
 }
 
+function euStatusLabel(source) {
+  switch (source) {
+    case "ok": return "data vers";
+    case "missing": return "geen data";
+    case "error": return "data fout";
+    default: return "data status onbekend";
+  }
+}
+
 function sourceBadge(sources) {
   const parts = [];
   if (sources.includes("eu")) parts.push('<span class="badge badge-eu">EU sanctielijst</span>');
@@ -153,7 +162,7 @@ async function loadStatus() {
     const s = await res.json();
     const parts = [
       `${s.entity_count.toLocaleString("nl-NL")} records`,
-      s.source === "fresh" ? "data vers" : "data gecachet",
+      euStatusLabel(s.source),
     ];
     if (s.opensanctions_active) {
       parts.push("OpenSanctions actief");

@@ -25,7 +25,8 @@ def parse_args(argv=None):
 def _emit(args, text: str) -> None:
     print(text, flush=True)
     if args.log:
-        Path(args.log).open("a").write(text + "\n")
+        with Path(args.log).open("a") as fh:
+            fh.write(text + "\n")
 
 
 def run_once(args) -> int:

@@ -1,4 +1,3 @@
-import hashlib
 import json
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from app.eu_ingest import (
     MANIFEST_FILENAME,
     TIMEOUT,
     XML_FILENAME,
+    _validate_xml,
     default_root,
     download_xml,
     fetch_headers,
@@ -157,6 +157,40 @@ def test_download_xml_retry_succeeds(tmp_path, monkeypatch):
     assert dest.read_bytes() == data
 
 
+def test_download_xml_validation_failure_keeps_dest(tmp_path, monkeypatch):
+    dest = tmp_path / "eu_sanctions.xml"
+    dest.write_bytes(FIXTURE_XML)
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeStreamResp([b"<garbage"]))
+    with pytest.raises(Exception):
+        download_xml("https://x", dest, validate=_validate_xml)
+    assert dest.read_bytes() == FIXTURE_XML
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_download_xml_part_cleaned_on_stream_failure(tmp_path, monkeypatch):
+    dest = tmp_path / "eu_sanctions.xml"
+
+    class FakeStreamFail:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            yield b"partial"
+            raise requests.ConnectionError("mid-stream")
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeStreamFail())
+    with pytest.raises(requests.ConnectionError):
+        download_xml("https://x", dest)
+    assert not dest.exists()
+    assert not list(tmp_path.glob("*.part"))
+
+
 def test_load_eu_manifest_missing(tmp_path):
     assert load_eu_manifest(tmp_path) == {}
 
@@ -211,6 +245,8 @@ def test_refresh_eu_skips_unchanged(tmp_path, monkeypatch):
     manifest = refresh_eu(tmp_path)
     assert manifest["stats"] == {"downloaded": 0, "skipped": 1, "failed": 0}
     assert manifest["status"] == "ok"
+    persisted = json.loads((tmp_path / "manifest.json").read_text())
+    assert persisted["updated_at"] != "x"
 
 
 def test_refresh_eu_force_redownloads(tmp_path, monkeypatch):

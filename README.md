@@ -50,7 +50,7 @@ Download de EU sanctielijst (XML 1.1, ~25 MB) naar `data/eu/`:
 **Cron (macOS/Linux), wekelijks maandag 04:00:**
 
 ```cron
-0 4 * * 1 cd /pad/naar/sanctielijst && .venv/bin/python scripts/update_eu.py --once >> data/eu/update.log 2>&1
+0 4 * * 1 cd /pad/naar/sanctielijst && mkdir -p data/eu && .venv/bin/python scripts/update_eu.py --once >> data/eu/update.log 2>&1
 ```
 
 **Container:** de service `eu-downloader` in `docker-compose.yml` draait hetzelfde script in loop-modus (`--interval 168`) met data op het `eu-data`-volume.
