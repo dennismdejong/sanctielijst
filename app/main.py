@@ -38,9 +38,11 @@ def _data_age_hours(downloaded_at: str | None) -> float | None:
         return None
     try:
         parsed = datetime.fromisoformat(downloaded_at)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return round((datetime.now(timezone.utc) - parsed).total_seconds() / 3600, 1)
     except (ValueError, TypeError):
         return None
-    return round((datetime.now(timezone.utc) - parsed).total_seconds() / 3600, 1)
 
 def _serialize_eu_result(result: matcher.EuMatchResult, query_name: str) -> dict:
     entity = result.entity

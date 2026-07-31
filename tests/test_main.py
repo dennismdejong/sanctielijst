@@ -296,3 +296,23 @@ def test_startup_corrupt_xml_boots_with_error(tmp_path):
     data = resp.json()
     assert data["source"] == "error"
     assert data["entity_count"] == 0
+
+
+def test_status_data_age_hours_tz_naive_ok(tmp_path):
+    import json
+
+    from app import main as main_module
+
+    eu_root = tmp_path / "eu"
+    eu_root.mkdir()
+    (eu_root / "manifest.json").write_text(json.dumps({
+        "status": "ok",
+        "downloaded_at": "2026-07-31T12:00:00",
+    }))
+    client = TestClient(create_app(entities=ENTITIES, eu_root=eu_root))
+    data = client.get("/api/status").json()
+    assert data["source"] == "ok"
+    assert data["data_age_hours"] is not None
+    assert isinstance(data["data_age_hours"], float)
+    assert main_module._data_age_hours("garbage") is None
+    assert main_module._data_age_hours(None) is None
