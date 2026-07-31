@@ -393,6 +393,7 @@ def create_app(
             entity_type=entity_type,
         )
         if not query.name:
+            _log_search(request, query, [], [])
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
         _log_search(request, query, results, warnings)
@@ -421,6 +422,7 @@ def create_app(
     ):
         query = matcher.SearchQuery(name=name.strip(), birth_year=birth_year, nationality=(nationality or "").strip() or None, birth_place=(birth_place or "").strip() or None, entity_type=entity_type)
         if not query.name:
+            _log_search(request, query, [], [])
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
         _log_search(request, query, results, warnings)

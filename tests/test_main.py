@@ -441,6 +441,18 @@ def test_audit_endpoint_disabled_without_token():
     assert resp.status_code == 404
 
 
+def test_audit_logs_422_blank_name(monkeypatch):
+    monkeypatch.setenv("AUDIT_ADMIN_TOKEN", "secret")
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/search", params={"name": "   "}).status_code == 422
+    assert client.get("/api/search/export", params={"name": "   "}).status_code == 422
+    resp = client.get("/api/audit", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert all(e["result_count"] == 0 for e in data["events"])
+
+
 def test_audit_endpoint_401_without_or_bad_token(monkeypatch):
     monkeypatch.setenv("AUDIT_ADMIN_TOKEN", "secret")
     client = TestClient(create_app(entities=ENTITIES))
