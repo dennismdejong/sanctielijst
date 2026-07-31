@@ -5,21 +5,35 @@ services:
       - "8000:8000"
     environment:
       - PEP_DATA_DIR=/data/pep
+      - EU_DATA_DIR=/data/eu
       - OPENSANCTIONS_API_KEY=${OPENSANCTIONS_API_KEY:-}
     volumes:
       - pep-data:/data/pep
+      - eu-data:/data/eu
     restart: unless-stopped
 
   pep-downloader:
     build:
       context: .
       dockerfile: Dockerfile.downloader
-    command: ["--interval", "168"]
+    command: ["scripts/update_pep.py", "--interval", "168"]
     environment:
       - PEP_DATA_DIR=/data/pep
     volumes:
       - pep-data:/data/pep
     restart: unless-stopped
 
+  eu-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile.downloader
+    command: ["scripts/update_eu.py", "--interval", "168"]
+    environment:
+      - EU_DATA_DIR=/data/eu
+    volumes:
+      - eu-data:/data/eu
+    restart: unless-stopped
+
 volumes:
   pep-data:
+  eu-data:

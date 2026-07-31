@@ -1,8 +1,9 @@
+.venv/
 __pycache__/
 *.pyc
-.venv/
+.pytest_cache/
 .env
 data/*.xml
 data/cache_meta.json
-.pytest_cache/
 data/pep/
+data/eu/
