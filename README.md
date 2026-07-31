@@ -65,3 +65,18 @@ Download alle individuele PEP-bronnen (~0.8 GB, `entities.ftm.json` per bron) na
 podman-compose up -d --build
 podman logs -f pep-downloader
 ```
+
+## Container images (GHCR)
+
+Bij elke git-tag (`v*`) bouwt GitHub Actions twee images en pusht die naar GitHub Container Registry:
+
+- `ghcr.io/dennismdejong/sanctielijst:<tag>` en `:latest` — de web-app (uvicorn, Python 3.14)
+- `ghcr.io/dennismdejong/sanctielijst-downloader:<tag>` en `:latest` — de PEP-downloader
+
+```bash
+# lokaal draaien
+podman run --rm -p 8000:8000 ghcr.io/dennismdejong/sanctielijst:latest
+podman run --rm ghcr.io/dennismdejong/sanctielijst-downloader:latest --once
+```
+
+`docker-compose.yml` bevat beide services (`app` + `pep-downloader`) met een gedeeld `pep-data`-volume.
