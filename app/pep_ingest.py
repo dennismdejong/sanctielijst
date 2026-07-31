@@ -81,3 +81,95 @@ def download_artifact(url: str, dest: Path, checksum: str, timeout: int = TIMEOU
             if attempt < retries:
                 time.sleep(DOWNLOAD_PAUSE)
     raise last_error
+
+
+import json
+from datetime import datetime, timezone
+from typing import Callable
+
+
+def load_pep_manifest(root_dir: Path) -> dict:
+    manifest_path = root_dir / MANIFEST_FILENAME
+    if not manifest_path.exists():
+        return {}
+    try:
+        return json.loads(manifest_path.read_text())
+    except Exception:
+        return {}
+
+
+def _source_entry(version: str, resource: dict, status: str, error: str = "") -> dict:
+    entry = {
+        "version": version,
+        "checksum": resource.get("checksum", ""),
+        "size": resource.get("size", 0),
+        "downloaded_at": None,
+        "status": status,
+    }
+    if error:
+        entry["error"] = error
+    return entry
+
+
+def refresh_pep(
+    root_dir: Path,
+    index: dict | None = None,
+    force: bool = False,
+    dry_run: bool = False,
+    limit: int | None = None,
+    logger: Callable[[str], None] | None = None,
+) -> dict:
+    if index is None:
+        index = fetch_index()
+    datasets = list_pep_datasets(index)
+    if limit is not None:
+        datasets = datasets[:limit]
+    manifest = load_pep_manifest(root_dir)
+    sources = dict(manifest.get("sources", {}))
+    stats = {"total": len(datasets), "downloaded": 0, "skipped": 0, "failed": 0, "bytes": 0}
+    for ds in datasets:
+        name = ds["name"]
+        resource = ds["resource"]
+        version = ds.get("version", "")
+        entry = sources.get(name, {})
+        dest = root_dir / name / RESOURCE_NAME
+        skip = (
+            not force
+            and entry.get("version") == version
+            and entry.get("status") == "ok"
+            and entry.get("checksum") == resource.get("checksum")
+            and dest.exists()
+        )
+        if skip:
+            sources[name] = dict(entry)
+            stats["skipped"] += 1
+            if logger:
+                logger(f"{name}: overgeslagen (ongewijzigd)")
+            continue
+        if dry_run:
+            sources[name] = _source_entry(version, resource, "pending")
+            stats["downloaded"] += 1
+            if logger:
+                logger(f"{name}: zou downloaden")
+            continue
+        try:
+            download_artifact(resource["url"], dest, resource.get("checksum", ""))
+            entry = _source_entry(version, resource, "ok")
+            entry["downloaded_at"] = datetime.now(timezone.utc).isoformat()
+            sources[name] = entry
+            stats["downloaded"] += 1
+            stats["bytes"] += resource.get("size", 0)
+            if logger:
+                logger(f"{name}: gedownload")
+        except Exception as exc:
+            sources[name] = _source_entry(version, resource, "error", str(exc))
+            stats["failed"] += 1
+            if logger:
+                logger(f"{name}: fout ({exc})")
+        if not dry_run:
+            time.sleep(DOWNLOAD_PAUSE)
+    result = {"updated_at": datetime.now(timezone.utc).isoformat(), "sources": sources, "stats": stats}
+    if not dry_run:
+        root_dir.mkdir(parents=True, exist_ok=True)
+        (root_dir / MANIFEST_FILENAME).write_text(json.dumps(result, indent=2))
+    return result

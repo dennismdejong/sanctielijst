@@ -187,3 +187,121 @@ def test_download_artifact_retry_succeeds(tmp_path, monkeypatch):
     download_artifact("https://x", dest, sha1_bytes(data), retries=1)
     assert calls["n"] == 2
     assert dest.read_bytes() == data
+
+
+import json
+
+from app.pep_ingest import load_pep_manifest, refresh_pep
+
+
+def test_load_pep_manifest_missing(tmp_path):
+    assert load_pep_manifest(tmp_path) == {}
+
+
+def test_load_pep_manifest_reads(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({"updated_at": "t"}))
+    assert load_pep_manifest(tmp_path) == {"updated_at": "t"}
+
+
+def test_load_pep_manifest_corrupt(tmp_path):
+    (tmp_path / "manifest.json").write_text("{niet-json")
+    assert load_pep_manifest(tmp_path) == {}
+
+
+def test_refresh_pep_full_run(tmp_path, monkeypatch):
+    index = make_index([
+        make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://a", checksum=sha1_bytes(b"a"))]),
+        make_source("br_pep", version="v1", resources=[make_resource(url="https://b", checksum=sha1_bytes(b"b"))]),
+    ])
+    logs = []
+
+    def fake_get(url, timeout, stream=False):
+        data = b"a" if url == "https://a" else b"b"
+        return FakeStreamResp([data])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    manifest = refresh_pep(tmp_path, index=index, logger=logs.append)
+    assert manifest["stats"] == {"total": 2, "downloaded": 2, "skipped": 0, "failed": 0, "bytes": 200}
+    assert (tmp_path / "al_kuvendi" / "entities.ftm.json").read_bytes() == b"a"
+    assert manifest["sources"]["al_kuvendi"]["status"] == "ok"
+    assert manifest["sources"]["al_kuvendi"]["version"] == "v1"
+    assert (tmp_path / "manifest.json").exists()
+    assert any("al_kuvendi" in line for line in logs)
+
+
+def test_refresh_pep_skips_unchanged(tmp_path, monkeypatch):
+    data = b"a"
+    index = make_index([make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://a", checksum=sha1_bytes(data))])])
+    (tmp_path / "al_kuvendi").mkdir(parents=True)
+    (tmp_path / "al_kuvendi" / "entities.ftm.json").write_bytes(data)
+    previous = {
+        "updated_at": "x",
+        "sources": {"al_kuvendi": {"version": "v1", "checksum": sha1_bytes(data), "size": 100, "downloaded_at": "t", "status": "ok"}},
+        "stats": {},
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(previous))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("should not download"))
+    manifest = refresh_pep(tmp_path, index=index)
+    assert manifest["stats"] == {"total": 1, "downloaded": 0, "skipped": 1, "failed": 0, "bytes": 0}
+
+
+def test_refresh_pep_force_redownloads(tmp_path, monkeypatch):
+    data = b"a"
+    index = make_index([make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://a", checksum=sha1_bytes(data))])])
+    (tmp_path / "al_kuvendi").mkdir(parents=True)
+    (tmp_path / "al_kuvendi" / "entities.ftm.json").write_bytes(data)
+    calls = {"n": 0}
+
+    def fake_get(url, timeout, stream=False):
+        calls["n"] += 1
+        return FakeStreamResp([data])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    manifest = refresh_pep(tmp_path, index=index, force=True)
+    assert calls["n"] == 1
+    assert manifest["stats"]["downloaded"] == 1
+
+
+def test_refresh_pep_dry_run_writes_nothing(tmp_path, monkeypatch):
+    index = make_index([make_source("al_kuvendi", version="v1")])
+    monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("should not download"))
+    manifest = refresh_pep(tmp_path, index=index, dry_run=True)
+    assert manifest["stats"]["downloaded"] == 1
+    assert manifest["sources"]["al_kuvendi"]["status"] == "pending"
+    assert not (tmp_path / "manifest.json").exists()
+    assert not (tmp_path / "al_kuvendi").exists()
+
+
+def test_refresh_pep_source_error_recorded(tmp_path, monkeypatch):
+    index = make_index([
+        make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://ok", checksum=sha1_bytes(b"d"))]),
+        make_source("br_pep", version="v1", resources=[make_resource(url="https://bad", checksum="ffff")]),
+    ])
+
+    def fake_get(url, timeout, stream=False):
+        return FakeStreamResp([b"d" if url == "https://ok" else b"x"])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    manifest = refresh_pep(tmp_path, index=index)
+    assert manifest["stats"] == {"total": 2, "downloaded": 1, "skipped": 0, "failed": 1, "bytes": 100}
+    assert manifest["sources"]["br_pep"]["status"] == "error"
+    assert "checksum" in manifest["sources"]["br_pep"]["error"]
+    assert (tmp_path / "al_kuvendi" / "entities.ftm.json").exists()
+    assert not (tmp_path / "br_pep" / "entities.ftm.json").exists()
+
+
+def test_refresh_pep_limit(tmp_path, monkeypatch):
+    data_a = b"a"
+    data_b = b"b"
+    index = make_index([
+        make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://a", checksum=sha1_bytes(data_a))]),
+        make_source("br_pep", version="v1", resources=[make_resource(url="https://b", checksum=sha1_bytes(data_b))]),
+    ])
+
+    def fake_get(url, timeout, stream=False):
+        return FakeStreamResp([data_a if url == "https://a" else data_b])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    manifest = refresh_pep(tmp_path, index=index, limit=1)
+    assert manifest["stats"]["total"] == 1
+    assert manifest["stats"]["downloaded"] == 1
