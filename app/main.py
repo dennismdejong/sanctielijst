@@ -1,6 +1,7 @@
 import dataclasses
 import json
 import logging
+import secrets
 import os
 import threading
 from datetime import datetime, timezone
@@ -363,7 +364,7 @@ def create_app(
                 path=request.url.path,
                 query=dataclasses.asdict(query),
                 result_count=len(results),
-                sources=sorted({r["source"] for r in results}),
+                sources=sorted({r.get("source", "") for r in results}),
                 threshold=matcher.THRESHOLD,
             )
         except Exception:
@@ -377,7 +378,7 @@ def create_app(
     ):
         if not audit_admin_token:
             raise HTTPException(status_code=404, detail="Audit-endpoint uitgeschakeld")
-        if authorization != f"Bearer {audit_admin_token}":
+        if not secrets.compare_digest(authorization or "", f"Bearer {audit_admin_token}"):
             raise HTTPException(status_code=401, detail="Niet geautoriseerd")
         return {"events": audit.list_events(audit_db, limit=limit, offset=offset), "total": audit.count_events(audit_db)}
 

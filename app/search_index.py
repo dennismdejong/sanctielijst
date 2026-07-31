@@ -110,7 +110,7 @@ def _positions_by_holder(pep_root: Path) -> dict[str, list[dict]]:
         for holder in props.get("holder") or []:
             for post in props.get("post") or []:
                 by_holder.setdefault(holder, []).append({
-                    "role": positions.get(post, post),
+                    "role": positions.get(post) or post,
                     "status": (props.get("status") or [""])[0],
                     "start": (props.get("startDate") or [""])[0],
                     "end": (props.get("endDate") or [""])[0],

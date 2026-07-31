@@ -24,7 +24,7 @@ COLUMNS = "id, ts, ip, user, user_agent, method, path, query, result_count, sour
 
 
 def default_audit_db() -> Path:
-    return Path(os.environ.get("AUDIT_DB", Path("data") / "audit.sqlite"))
+    return Path(os.environ.get("AUDIT_DB") or str(Path("data") / "audit.sqlite"))
 
 
 def _open(db_path: Path) -> sqlite3.Connection:
