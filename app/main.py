@@ -266,6 +266,10 @@ def create_app(
     def index():
         return FileResponse(str(static_dir / "index.html"))
 
+    @app.get("/audit")
+    def audit_page():
+        return FileResponse(str(static_dir / "audit.html"))
+
     @app.get("/api/health")
     def health():
         return {"status": "ok"}

@@ -147,6 +147,16 @@ def test_index_serves_html(tmp_path):
     assert resp.text == "<h1>hi</h1>"
 
 
+def test_audit_page_served(tmp_path):
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "audit.html").write_text("<h1>audit</h1>")
+    client = TestClient(create_app(entities=ENTITIES, static_dir=static))
+    resp = client.get("/audit")
+    assert resp.status_code == 200
+    assert resp.text == "<h1>audit</h1>"
+
+
 def _write_pep_fixture(root):
     import json
     for ds, entities in [

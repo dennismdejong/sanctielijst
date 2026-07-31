@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audit-log | Compliance Zoeker</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .audit-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+    .audit-table th, .audit-table td {
+      padding: 0.5rem 0.6rem;
+      text-align: left;
+      font-size: 0.85rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    .audit-table th { background: #f6f8fa; white-space: nowrap; }
+    .audit-table tr:last-child td { border-bottom: none; }
+    .audit-table td.query-cell { min-width: 12rem; }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <h1>Audit-log</h1>
+    <p>Zoek- en export-activiteiten op de Compliance Zoeker.</p>
+  </header>
+  <main>
+    <section class="search-panel">
+      <div class="field">
+        <label for="token">Beheertoken</label>
+        <input type="password" id="token" name="token" autocomplete="off" placeholder="AUDIT_ADMIN_TOKEN">
+      </div>
+      <button type="button" id="load-btn">Toon events</button>
+      <p id="status-line" class="status-line" role="status"></p>
+    </section>
+    <section id="events" aria-live="polite"></section>
+  </main>
+  <footer class="footer" role="contentinfo">
+    <a href="/">Terug naar zoeken</a>
+  </footer>
+  <script src="/static/audit.js"></script>
+</body>
+</html>

@@ -67,6 +67,16 @@ Download de EU sanctielijst (XML 1.1, ~25 MB) naar `data/eu/`:
 python -m pytest -v
 ```
 
+## Audit-log
+
+Elke zoekopdracht en PDF-export wordt gelogd in een aparte SQLite-database, `data/audit.sqlite` (overschrijfbaar met env `AUDIT_DB`). Dit bestand is gitignored en staat los van de zoekindex, zodat de audit-historie niet verdwijnt bij een index-rebuild.
+
+Een event bevat het tijdstip (UTC), het client-IP, de user-agent, methode en pad, de zoekquery, het aantal resultaten en de gebruikte bronnen. Achter een reverse proxy leest de app het client-IP uit `X-Forwarded-For` — draai uvicorn dan met `--proxy-headers`.
+
+Beheerweergave: `GET /api/audit` retourneert de events, gesorteerd op tijdstip en met paginering via `limit`/`offset`. Het endpoint is alleen actief als env `AUDIT_ADMIN_TOKEN` is ingesteld; toegang vereist `Authorization: Bearer <AUDIT_ADMIN_TOKEN>`. Zonder token is het endpoint uitgeschakeld (404). Een simpele admin-pagina staat op `/audit` (link in de footer, alleen zichtbaar als het endpoint actief is) en vraagt om het token.
+
+De kolom `user` wordt gevuld zodra login (Microsoft Entra ID of lokaal, zie het login-plan) is geïmplementeerd; tot die tijd is hij leeg.
+
 ## Wekelijks bijwerken PEP-data (OpenSanctions)
 
 Download alle individuele PEP-bronnen (~0.8 GB, `entities.ftm.json` per bron) naar `data/pep/`:

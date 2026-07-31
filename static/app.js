@@ -217,7 +217,29 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-loadStatus();
+async function maybeShowAuditLink() {
+  const footer = document.getElementById("footer");
+  if (!footer) return;
+  let res;
+  try {
+    res = await fetch("/api/audit");
+  } catch {
+    return;
+  }
+  if (res.status !== 401) return;
+  const link = document.createElement("a");
+  link.href = "/audit";
+  link.textContent = "Audit-log";
+  link.style.marginLeft = "0.75rem";
+  footer.appendChild(link);
+}
+
+async function init() {
+  await loadStatus();
+  await maybeShowAuditLink();
+}
+
+init();
 
 const exportBtn = document.getElementById("export-btn");
 exportBtn.addEventListener("click", () => {
