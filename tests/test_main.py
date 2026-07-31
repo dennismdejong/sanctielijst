@@ -385,6 +385,50 @@ def test_export_returns_pdf(tmp_path, monkeypatch):
     assert resp.content[:4] == b"%PDF"
 
 
+def test_export_csv_format(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.get("/api/search/export", params={"name": "JORGE FERNANDEZ", "format": "csv"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.content[:3] == b"\xef\xbb\xbf"
+    body = resp.content.decode("utf-8-sig")
+    assert "naam;score;bron;datasets;match-details;eu_referentie;geboortedata;nationaliteit;links" in body
+    assert "JORGE FERNÁNDEZ" in body
+    assert b".csv" in resp.headers["content-disposition"].encode()
+
+
+def test_export_xlsx_format(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.get("/api/search/export", params={"name": "JORGE FERNANDEZ", "format": "xlsx"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.content[:2] == b"PK"
+    from io import BytesIO
+    from openpyxl import load_workbook
+    wb = load_workbook(BytesIO(resp.content))
+    ws = wb["Screening"]
+    assert [c.value for c in ws[1]] == ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
+    assert ws["A2"].value == "JORGE FERNÁNDEZ"
+    assert b".xlsx" in resp.headers["content-disposition"].encode()
+
+
+def test_export_invalid_format_is_422(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.get("/api/search/export", params={"name": "JORGE FERNANDEZ", "format": "onzin"})
+    assert resp.status_code == 422
+
+
 def test_export_requires_name():
     client = TestClient(create_app(entities=ENTITIES))
     assert client.get("/api/search/export").status_code == 422

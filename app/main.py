@@ -15,7 +15,7 @@ from . import audit
 from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_ingest
 from . import search_index
-from .export import render_search_pdf
+from .export import render_search_csv, render_search_pdf, render_search_xlsx
 
 load_dotenv()
 
@@ -423,6 +423,7 @@ def create_app(
         birth_place: str | None = None,
         entity_type: str | None = Query(None, pattern="^(person|enterprise)$"),
         author: str | None = None,
+        format: str = Query("pdf", pattern="^(pdf|csv|xlsx)$"),
     ):
         query = matcher.SearchQuery(name=name.strip(), birth_year=birth_year, nationality=(nationality or "").strip() or None, birth_place=(birth_place or "").strip() or None, entity_type=entity_type)
         if not query.name:
@@ -440,13 +441,32 @@ def create_app(
             "author": author, "generated_at": generated,
             "threshold": matcher.THRESHOLD, "max_results": matcher.MAX_RESULTS,
         }
-        try:
-            pdf = render_search_pdf(payload)
-        except Exception:
-            logger.exception("PDF-generatie mislukt")
-            raise HTTPException(status_code=500, detail="PDF-generatie mislukt")
-        filename = f"screening-{now.strftime('%Y-%m-%d')}.pdf"
-        return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        if format == "csv":
+            try:
+                content = render_search_csv(results, payload["query"]).encode("utf-8-sig")
+            except Exception:
+                logger.exception("CSV-generatie mislukt")
+                raise HTTPException(status_code=500, detail="CSV-generatie mislukt")
+            media_type = "text/csv; charset=utf-8"
+            extension = "csv"
+        elif format == "xlsx":
+            try:
+                content = render_search_xlsx(results, payload["query"])
+            except Exception:
+                logger.exception("XLSX-generatie mislukt")
+                raise HTTPException(status_code=500, detail="XLSX-generatie mislukt")
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            extension = "xlsx"
+        else:
+            try:
+                content = render_search_pdf(payload)
+            except Exception:
+                logger.exception("PDF-generatie mislukt")
+                raise HTTPException(status_code=500, detail="PDF-generatie mislukt")
+            media_type = "application/pdf"
+            extension = "pdf"
+        filename = f"screening-{now.strftime('%Y-%m-%d')}.{extension}"
+        return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
