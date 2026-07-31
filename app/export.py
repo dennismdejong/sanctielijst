@@ -23,8 +23,7 @@ def _query_lines(query: dict) -> list[str]:
     labels = [("birth_year", "Geboortejaar"), ("nationality", "Nationaliteit"), ("birth_place", "Geboorteplaats"), ("entity_type", "Type")]
     for key, label in labels:
         value = query.get(key)
-        if value:
-            lines.append(f"{label}: {_escape(value)}")
+        lines.append(f"{label}: {_escape(value) if value else 'NVT'}")
     return lines
 
 

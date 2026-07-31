@@ -157,3 +157,21 @@ def test_render_many_results_paginates():
         })
     data = render_search_pdf(payload)
     assert data[:4] == b"%PDF"
+
+
+def test_render_empty_query_fields_shown_as_nvt():
+    payload = _payload()
+    text = _decoded_text(render_search_pdf(payload))
+    assert b"Geboortejaar: NVT" in text
+    assert b"Nationaliteit: NVT" in text
+    assert b"Geboorteplaats: NVT" in text
+    assert b"Type: NVT" in text
+
+
+def test_render_filled_query_fields():
+    payload = _payload(query={"name": "JORGE FERNANDEZ", "birth_year": 1965, "nationality": "AR", "birth_place": "Buenos Aires", "entity_type": "person"})
+    text = _decoded_text(render_search_pdf(payload))
+    assert b"Geboortejaar: 1965" in text
+    assert b"Nationaliteit: AR" in text
+    assert b"Geboorteplaats: Buenos Aires" in text
+    assert b"Type: person" in text
