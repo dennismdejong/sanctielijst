@@ -152,3 +152,24 @@ def test_load_index_missing_xml_with_fresh_meta_redownloads(monkeypatch, tmp_pat
     entities, meta = load_index(tmp_path, ttl=86400)
     assert len(entities) == 2
     assert meta["source"] == "fresh"
+
+
+from app.pep_ingest import write_datasets_meta
+
+
+def test_write_datasets_meta(tmp_path):
+    index = {"datasets": [
+        {"name": "ar_parliament", "collections": ["peps"], "title": "Argentina Members of Parliament", "publisher": {"name": "HCDN", "country": "ar", "official": True}, "url": "https://parlament.ar"},
+        {"name": "eu_fsf", "collections": ["default"], "title": "EU Sanctions", "publisher": {"name": "EU"}},
+    ]}
+    write_datasets_meta(index, tmp_path)
+    meta = json.loads((tmp_path / "datasets.json").read_text())
+    assert meta == {
+        "ar_parliament": {"title": "Argentina Members of Parliament", "publisher": "HCDN", "country": "ar", "official": True, "url": "https://parlament.ar"},
+    }
+
+
+def test_write_datasets_meta_atomic_no_tmp_left(tmp_path):
+    write_datasets_meta({"datasets": []}, tmp_path)
+    assert (tmp_path / "datasets.json").exists()
+    assert not (tmp_path / "datasets.json.tmp").exists()

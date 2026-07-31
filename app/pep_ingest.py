@@ -179,4 +179,30 @@ def refresh_pep(
         tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
         tmp.write_text(json.dumps(result, indent=2))
         os.replace(tmp, manifest_path)
+        write_datasets_meta(index, root_dir)
     return result
+
+
+def write_datasets_meta(index: dict, root_dir: Path) -> None:
+    raw = index.get("datasets") or []
+    if isinstance(raw, dict):
+        raw = list(raw.values())
+    meta = {}
+    for ds in raw:
+        if not isinstance(ds, dict):
+            continue
+        if PEP_COLLECTION not in (ds.get("collections") or []):
+            continue
+        pub = ds.get("publisher") or {}
+        meta[ds["name"]] = {
+            "title": ds.get("title", ""),
+            "publisher": pub.get("name", ""),
+            "country": pub.get("country", ""),
+            "official": bool(pub.get("official")),
+            "url": ds.get("url", ""),
+        }
+    root_dir.mkdir(parents=True, exist_ok=True)
+    path = root_dir / "datasets.json"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    os.replace(tmp, path)
