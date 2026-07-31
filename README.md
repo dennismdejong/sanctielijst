@@ -14,7 +14,7 @@ pip install -r requirements.txt
 
 De app leest de EU sanctielijst (XML 1.1, ~25 MB) uit `data/eu/` (env `EU_DATA_DIR`). De download gebeurt door de downloader (`scripts/update_eu.py`, zie "Wekelijks bijwerken EU-data"); de app downloadt niet meer zelf. `POST /api/refresh` voert dezelfde manifest-refresh direct uit.
 
-Daarnaast zoekt de app in de PEP-index in `data/pep/` (OpenSanctions PEP-bronnen, zie "Wekelijks bijwerken PEP-data"). De index wordt bij het opstarten automatisch herbouwd wanneer `data/pep/` is gewijzigd en wordt gecacht als `data/pep/index.pkl`. `POST /api/refresh` ververst alleen de EU-lijst, niet de PEP-index; verfris de PEP-index door de downloader uit te voeren: `.venv/bin/python scripts/update_pep.py --once`. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat).
+Daarnaast zoekt de app in `data/search.sqlite`, een SQLite+FTS5-zoekindex over de EU- én de OpenSanctions PEP-data (zie "Wekelijks bijwerken PEP-data"). Het pad is te overschrijven met de `SEARCH_DB`-env; default is `data/search.sqlite`. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat); de EU-lijst wordt altijd geïndexeerd. `POST /api/refresh` ververst alleen de EU-lijst, niet de PEP-data; verfris de PEP-data door de downloader uit te voeren: `.venv/bin/python scripts/update_pep.py --once`.
 
 ## Starten
 
@@ -72,6 +72,8 @@ Download alle individuele PEP-bronnen (~0.8 GB, `entities.ftm.json` per bron) na
 - Manifest: `data/pep/manifest.json` (downloaddatum, versie, checksums, status per bron).
 - Ongewijzigde bronnen worden overgeslagen; alleen gewijzigde worden herdownload.
 - Kies een pad met `--root` of env `PEP_DATA_DIR`.
+
+Wanneer de EU- of PEP-data verandert, herbouwt de app `data/search.sqlite` automatisch op de achtergrond — een restart is niet nodig.
 
 **Cron (macOS/Linux), wekelijks maandag 04:00:**
 

@@ -167,11 +167,13 @@ async function loadStatus() {
     if (s.opensanctions_active) {
       parts.push("OpenSanctions actief");
     }
-    if (s.pep_index) {
-      if (s.pep_index.status === "loading") {
-        parts.push("PEP-index wordt geladen…");
-      } else if (s.pep_index.enabled) {
-        parts.push(`${s.pep_index.entity_count.toLocaleString("nl-NL")} PEP-records`);
+    if (s.index) {
+      if (s.index.status === "building") {
+        parts.push("Index wordt opgebouwd…");
+      } else if (s.index.status === "error") {
+        parts.push("Index-fout");
+      } else if (s.index.enabled) {
+        parts.push(`${s.index.pep_count.toLocaleString("nl-NL")} PEP-records`);
       }
     }
     statusLine.textContent = parts.join(" · ");
