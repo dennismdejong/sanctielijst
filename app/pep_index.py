@@ -1,7 +1,7 @@
 import json
-import os
 import pickle
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,14 +11,21 @@ DATASETS_FILENAME = "datasets.json"
 INDEX_ENV = "PEP_INDEX_ENABLED"
 
 
+def _fold(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in folded if not unicodedata.combining(c))
+
+
 def _tokens(text: str) -> list[str]:
-    return [t for t in re.split(r"[^a-z0-9]+", text.lower()) if len(t) >= 2]
+    return [t for t in re.split(r"[^a-z0-9]+", _fold(text)) if len(t) >= 2]
 
 
 def _extract_entity(line: str) -> dict | None:
     try:
         data = json.loads(line)
     except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
         return None
     if not data.get("target"):
         return None
@@ -147,11 +154,11 @@ def _birth_year(value: str) -> int | None:
 def _name_score(names: list[str], query: str) -> tuple[int, str | None]:
     best = 0
     best_name = None
-    q = query.strip()
+    q = _fold(query).strip()
     for name in names:
         if not name:
             continue
-        score = fuzz.token_set_ratio(q, name)
+        score = fuzz.token_set_ratio(q, _fold(name))
         if score > best:
             best = score
             best_name = name

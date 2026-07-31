@@ -31,7 +31,7 @@ def company(id_, caption, target=True, datasets=("ds1",), **props):
 
 
 FIXTURE = [
-    person("NK-1", "JORGE FERNANDEZ", birthDate=["1965-03-01"], citizenship=["ar"], political=["PRIMERO SAN LUIS"], topics=["role.pep"]),
+    person("NK-1", "JORGE FERNÁNDEZ", birthDate=["1965-03-01"], citizenship=["ar"], political=["PRIMERO SAN LUIS"], topics=["role.pep"]),
     person("NK-2", "Maria Lopez", target=False),
     person("NK-3", "GUILLERMO CESAR AGUERO", birthDate=["1970"]),
     company("NK-4", "Yacimientos Petroliferos"),
@@ -58,7 +58,7 @@ def test_build_index_filters(tmp_path):
     assert ids == ["NK-1", "NK-3", "NK-4", "NK-6"]
     assert index["skipped_lines"] == 3
     jorge = index["entities"][0]
-    assert jorge["names"] == ["JORGE FERNANDEZ"]
+    assert jorge["names"] == ["JORGE FERNÁNDEZ"]
     assert jorge["birth_dates"] == ["1965-03-01"]
     assert jorge["citizenships"] == ["ar"]
     assert "jorge" in index["token_map"]
@@ -117,11 +117,30 @@ def pep_index_data(tmp_path):
 
 def test_search_exact_top(pep_index_data):
     index, _ = pep_index_data
-    results = search_pep(index, "JORGE FERNANDEZ")
-    assert results[0]["entity"]["id"] == "NK-1"
-    assert results[0]["score"] == 100
-    assert results[0]["matched_name"] == "JORGE FERNANDEZ"
-    assert results[0]["details"][0]["feature"] == "naam"
+    for query in ("JORGE FERNÁNDEZ", "JORGE FERNANDEZ"):
+        results = search_pep(index, query)
+        assert results[0]["entity"]["id"] == "NK-1"
+        assert results[0]["score"] == 100
+        assert results[0]["matched_name"] == "JORGE FERNÁNDEZ"
+        assert results[0]["details"][0]["feature"] == "naam"
+
+
+def test_search_accent_insensitive(pep_index_data):
+    index, _ = pep_index_data
+    results = search_pep(index, "FERNANDEZ")
+    assert results and results[0]["entity"]["id"] == "NK-1"
+
+
+def test_build_index_skips_non_object_lines(tmp_path):
+    path = tmp_path / "ds1" / "entities.ftm.json"
+    path.parent.mkdir(parents=True)
+    with path.open("w") as fh:
+        fh.write("null\n")
+        fh.write("[1,2]\n")
+        fh.write(json.dumps(person("NK-1", "JORGE FERNÁNDEZ")) + "\n")
+    index = build_index(tmp_path)
+    assert [e["id"] for e in index["entities"]] == ["NK-1"]
+    assert index["skipped_lines"] == 2
 
 
 def test_search_fuzzy(pep_index_data):

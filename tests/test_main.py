@@ -167,7 +167,7 @@ def _write_pep_fixture(root):
     import json
     for ds, entities in [
         ("ar_parliament", [
-            {"id": "NK-x", "caption": "JORGE FERNANDEZ", "schema": "Person", "target": True, "datasets": ["ar_parliament"],
+            {"id": "NK-x", "caption": "JORGE FERNÁNDEZ", "schema": "Person", "target": True, "datasets": ["ar_parliament"],
              "properties": {"birthDate": ["1965-03-01"], "citizenship": ["ar"], "political": ["PRIMERO SAN LUIS"], "topics": ["role.pep"]}},
         ]),
     ]:

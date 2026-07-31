@@ -193,8 +193,11 @@ def write_datasets_meta(index: dict, root_dir: Path) -> None:
             continue
         if PEP_COLLECTION not in (ds.get("collections") or []):
             continue
+        name = ds.get("name")
+        if not name:
+            continue
         pub = ds.get("publisher") or {}
-        meta[ds["name"]] = {
+        meta[name] = {
             "title": ds.get("title", ""),
             "publisher": pub.get("name", ""),
             "country": pub.get("country", ""),

@@ -14,7 +14,7 @@ pip install -r requirements.txt
 
 Bij de eerste start downloadt de app de EU sanctielijst (XML 1.1, ~25 MB) van `data.europa.eu` en cacht deze in `data/`. De cache wordt automatisch ververst als deze ouder is dan 24 uur. Forceer verversen via `POST /api/refresh`.
 
-Daarnaast zoekt de app in de PEP-index in `data/pep/` (OpenSanctions PEP-bronnen, zie "Wekelijks bijwerken PEP-data"). De index wordt automatisch gebouwd en gecacht (pickle) bij de eerste start en ververst bij `POST /api/refresh`. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat).
+Daarnaast zoekt de app in de PEP-index in `data/pep/` (OpenSanctions PEP-bronnen, zie "Wekelijks bijwerken PEP-data"). De index wordt bij het opstarten automatisch herbouwd wanneer `data/pep/` is gewijzigd en wordt gecacht als `data/pep/index.pkl`. `POST /api/refresh` ververst alleen de EU-lijst, niet de PEP-index; verfris de PEP-index door de downloader uit te voeren: `.venv/bin/python scripts/update_pep.py --once`. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat).
 
 ## Starten
 
