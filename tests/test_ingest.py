@@ -53,3 +53,82 @@ def test_parse_export_enterprise():
     assert ent["aliases"][0]["strong"] is True
     assert ent["citizenships"] == [{"iso2": "RU", "description": "RUSSIAN FEDERATION"}]
     assert ent["birthdates"] == []
+
+
+import json
+from pathlib import Path
+import pytest
+from app.ingest import download_xml, load_index, refresh
+
+
+def write_cache(tmp_path: Path, xml: bytes, cached_at: int):
+    (tmp_path / "eu_sanctions.xml").write_bytes(xml)
+    meta = {"cached_at": cached_at, "generated_at": "2026-07-28T11:43:32+02:00", "entity_count": 2}
+    (tmp_path / "cache_meta.json").write_text(json.dumps(meta))
+
+
+def test_download_xml_calls_requests(monkeypatch):
+    import requests
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        @property
+        def content(self):
+            return b"<xml/>"
+
+    def fake_get(url, timeout):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return FakeResp()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    result = download_xml()
+    assert result == b"<xml/>"
+    assert captured["url"] == "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw"
+    assert captured["timeout"] == 120
+
+
+def test_refresh_downloads_and_writes(monkeypatch, tmp_path):
+    xml = (Path(__file__).parent / "fixtures" / "eu_sample.xml").read_bytes()
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: xml)
+    meta = refresh(tmp_path)
+    assert (tmp_path / "eu_sanctions.xml").read_bytes() == xml
+    assert (tmp_path / "cache_meta.json").exists()
+    assert meta["entity_count"] == 2
+    assert meta["generated_at"] == "2026-07-28T11:43:32+02:00"
+
+
+def test_load_index_downloads_when_missing(monkeypatch, tmp_path):
+    xml = (Path(__file__).parent / "fixtures" / "eu_sample.xml").read_bytes()
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: xml)
+    entities, meta = load_index(tmp_path, ttl=86400)
+    assert len(entities) == 2
+    assert meta["source"] == "fresh"
+
+
+def test_load_index_uses_cache_when_fresh(monkeypatch, tmp_path):
+    xml = (Path(__file__).parent / "fixtures" / "eu_sample.xml").read_bytes()
+    write_cache(tmp_path, xml, cached_at=9999999999)
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: pytest.fail("should not download"))
+    entities, meta = load_index(tmp_path, ttl=86400)
+    assert len(entities) == 2
+    assert meta["source"] == "cached"
+
+
+def test_load_index_falls_back_to_cache_on_error(monkeypatch, tmp_path):
+    xml = (Path(__file__).parent / "fixtures" / "eu_sample.xml").read_bytes()
+    write_cache(tmp_path, xml, cached_at=1)
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    entities, meta = load_index(tmp_path, ttl=0)
+    assert len(entities) == 2
+    assert meta["source"] == "cached"
+    assert "boom" in meta["error"]
+
+
+def test_load_index_raises_when_no_cache_and_download_fails(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        load_index(tmp_path, ttl=0)

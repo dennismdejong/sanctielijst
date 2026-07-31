@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export xmlns="http://eu.europa.ec/fpi/fsd/export" generationDate="2026-07-28T11:43:32+02:00" globalFileId="1">
+  <sanctionEntity logicalId="L1" euReferenceNumber="EU.471.56" designationDate="2001-02-01" unitedNationId="TAL123">
+    <subjectType code="person" classificationCode="P"/>
+    <nameAlias firstName="Abdul" lastName="Hazem" wholeName="Abdul Hai Hazem Abdul Qader" strong="true" function="Diplomat"/>
+    <nameAlias wholeName="Abdul Hai Hazem" strong="false"/>
+    <citizenship countryIso2Code="AF" countryDescription="AFGHANISTAN"/>
+    <birthdate year="1971" birthdate="1971-02-15" place="Kabul" countryIso2Code="AF" countryDescription="AFGHANISTAN"/>
+    <address city="Kabul" street="Main St" region="Kabul Province" countryIso2Code="AF" countryDescription="AFGHANISTAN"/>
+    <identification number="D123" identificationTypeCode="passport" identificationTypeDescription="National passport" countryIso2Code="AF"/>
+    <regulation numberTitle="2001/154/CFSP" publicationDate="2001-02-27" programme="AFG">
+      <publicationUrl>https://eur-lex.europa.eu/example</publicationUrl>
+    </regulation>
+    <remark>Some remarks text</remark>
+  </sanctionEntity>
+  <sanctionEntity logicalId="L2" euReferenceNumber="EU.2" designationDate="2022-03-09">
+    <subjectType code="enterprise" classificationCode="E"/>
+    <nameAlias wholeName="Rosneft" strong="true"/>
+    <citizenship countryIso2Code="RU" countryDescription="RUSSIAN FEDERATION"/>
+  </sanctionEntity>
+</export>

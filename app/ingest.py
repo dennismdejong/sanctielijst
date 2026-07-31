@@ -91,3 +91,63 @@ def parse_export(xml_bytes: bytes) -> list[dict]:
             "remarks": remarks,
         })
     return entities
+
+
+import json
+import time
+from pathlib import Path
+
+import requests
+
+DATASET_URL = "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw"
+CACHE_TTL = 24 * 60 * 60
+XML_FILENAME = "eu_sanctions.xml"
+META_FILENAME = "cache_meta.json"
+
+
+def _read_generation_date(xml_bytes: bytes) -> str:
+    return ET.fromstring(xml_bytes).get("generationDate", "")
+
+
+def download_xml(url: str = DATASET_URL, timeout: int = 120) -> bytes:
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
+
+
+def refresh(cache_dir: Path, url: str = DATASET_URL) -> dict:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    content = download_xml(url)
+    (cache_dir / XML_FILENAME).write_bytes(content)
+    meta = {
+        "cached_at": int(time.time()),
+        "generated_at": _read_generation_date(content),
+        "entity_count": len(parse_export(content)),
+    }
+    (cache_dir / META_FILENAME).write_text(json.dumps(meta))
+    return meta
+
+
+def load_index(cache_dir: Path, url: str = DATASET_URL, ttl: int = CACHE_TTL) -> tuple[list[dict], dict]:
+    xml_path = cache_dir / XML_FILENAME
+    meta_path = cache_dir / META_FILENAME
+    meta = {}
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text())
+    age = time.time() - meta.get("cached_at", 0) if meta.get("cached_at") else None
+    stale = age is None or age > ttl
+    if stale:
+        try:
+            meta = refresh(cache_dir, url)
+            meta["source"] = "fresh"
+        except Exception as exc:
+            if xml_path.exists():
+                meta = dict(meta)
+                meta["source"] = "cached"
+                meta["error"] = str(exc)
+            else:
+                raise
+    else:
+        meta = dict(meta)
+        meta["source"] = "cached"
+    return parse_export(xml_path.read_bytes()), meta
