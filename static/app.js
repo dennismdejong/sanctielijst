@@ -218,3 +218,22 @@ form.addEventListener("submit", async (e) => {
 });
 
 loadStatus();
+
+const exportBtn = document.getElementById("export-btn");
+exportBtn.addEventListener("click", () => {
+  const name = document.getElementById("name").value.trim();
+  if (!name) return;
+  const params = new URLSearchParams();
+  params.set("name", name);
+  const birthYear = document.getElementById("birth_year").value;
+  if (birthYear) params.set("birth_year", birthYear);
+  const nationality = document.getElementById("nationality").value.trim();
+  if (nationality) params.set("nationality", nationality);
+  const birthPlace = document.getElementById("birth_place").value.trim();
+  if (birthPlace) params.set("birth_place", birthPlace);
+  const entityType = document.getElementById("entity_type").value;
+  if (entityType) params.set("entity_type", entityType);
+  const author = document.getElementById("author").value.trim();
+  if (author) params.set("author", author);
+  window.open(`/api/search/export?${params}`, "_blank");
+});

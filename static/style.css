@@ -69,6 +69,14 @@ button {
 }
 button:hover { opacity: 0.9; }
 
+#export-btn {
+  background: #fff;
+  color: var(--eu);
+  border: 1px solid var(--eu);
+  margin-top: 1.6rem;
+}
+#export-btn:hover { background: #eef3ff; opacity: 1; }
+
 .status-line { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
 
 .warnings {
