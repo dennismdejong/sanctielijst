@@ -163,6 +163,14 @@ def pep_disabled(monkeypatch):
     monkeypatch.setenv(pep_index.INDEX_ENV, "0")
 
 
+def test_default_pep_root_uses_env(monkeypatch):
+    from app import main as main_module
+    monkeypatch.setenv("PEP_DATA_DIR", "/data/pep")
+    assert main_module.default_pep_root() == Path("/data/pep")
+    monkeypatch.delenv("PEP_DATA_DIR", raising=False)
+    assert main_module.default_pep_root() == main_module.PEP_ROOT
+
+
 def _write_pep_fixture(root):
     import json
     for ds, entities in [

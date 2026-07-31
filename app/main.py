@@ -15,11 +15,15 @@ from . import pep_index
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
-PEP_ROOT = Path(__file__).resolve().parent.parent / "data" / "pep"
 
+
+def default_pep_root() -> Path:
+    return Path(os.environ.get("PEP_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data" / "pep")))
+
+
+PEP_ROOT = default_pep_root()
 
 def _serialize_eu_result(result: matcher.EuMatchResult, query_name: str) -> dict:
     entity = result.entity
