@@ -94,3 +94,81 @@ def test_pep_records_filters():
     assert jorge["birth_dates"] == ["1965-03-01"]
     assert jorge["citizenships"] == ["ar"]
     assert jorge["datasets"] == ["ds1"]
+
+
+import sqlite3
+
+from app.search_index import _open, _schema, build_index, search
+
+
+def build_fixture(root, db_path, include_eu=True, include_pep=True):
+    eu = [eu_entity()] if include_eu else []
+    if include_pep:
+        write_ftm(root, "ds1", [
+            {"id": "NK-1", "caption": "JORGE FERNÁNDEZ", "schema": "Person", "target": True, "datasets": ["ds1"],
+             "properties": {"name": ["JORGE FERNÁNDEZ"], "birthDate": ["1965-03-01"], "citizenship": ["ar"]}},
+        ])
+    return build_index(db_path, eu, root)
+
+
+def test_build_index_counts(tmp_path):
+    stats = build_fixture(tmp_path, tmp_path / "search.sqlite")
+    assert stats["eu_count"] == 1
+    assert stats["pep_count"] == 1
+    assert stats["total"] == 2
+    assert (tmp_path / "search.sqlite").exists()
+    assert not (tmp_path / "search.sqlite.new").exists()
+
+
+def test_build_index_fresh_overwrites(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    build_fixture(tmp_path, db_path)
+    assert _schema(_open(db_path)) == 2
+
+
+def test_search_exact_and_fuzzy(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    db = _open(db_path)
+    results = search(db, "JORGE FERNANDEZ")
+    assert results and results[0]["entity"]["source"] == "pep"
+    assert results[0]["score"] == 100
+    assert results[0]["matched_name"] == "JORGE FERNÁNDEZ"
+    results = search(db, "JORGE FERNÁNDEZ")
+    assert results and results[0]["entity"]["id"] == "NK-1"
+
+
+def test_search_eu_source_and_raw(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    db = _open(db_path)
+    results = search(db, "John Smith")
+    assert results and results[0]["entity"]["source"] == "eu"
+    assert results[0]["entity"]["raw"]["eu_reference_number"] == "EU.1"
+
+
+def test_search_entity_type_filter(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    db = _open(db_path)
+    assert [r["entity"]["source"] for r in search(db, "JORGE", entity_type="enterprise")] == []
+    assert search(db, "JORGE", entity_type="person")[0]["entity"]["source"] == "pep"
+
+
+def test_search_threshold_and_max(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    db = _open(db_path)
+    assert search(db, "JORGE", threshold=0, max_results=1)
+    assert len(search(db, "JORGE", threshold=0, max_results=1)) == 1
+    assert search(db, "Zzqqq Xxww") == []
+    assert search(db, "!!") == []
+
+
+def test_search_birth_year_and_nationality(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    db = _open(db_path)
+    results = search(db, "JORGE", birth_year=1965, nationality="ar", threshold=60)
+    assert results and results[0]["score"] >= 90

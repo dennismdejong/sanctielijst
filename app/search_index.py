@@ -1,8 +1,11 @@
 import json
 import os
 import re
+import sqlite3
 import unicodedata
 from pathlib import Path
+
+from rapidfuzz import fuzz
 
 THRESHOLD = 90
 MAX_RESULTS = 20
@@ -106,3 +109,158 @@ def _pep_records(pep_root: Path) -> list[dict]:
                     "raw": None,
                 })
     return records
+
+
+SCHEMA = """
+CREATE TABLE entities (
+  rowid INTEGER PRIMARY KEY,
+  source TEXT NOT NULL,
+  id TEXT NOT NULL,
+  caption TEXT NOT NULL,
+  schema TEXT NOT NULL,
+  names TEXT NOT NULL,
+  names_folded TEXT NOT NULL,
+  birth_dates TEXT NOT NULL,
+  birth_places TEXT NOT NULL,
+  citizenships TEXT NOT NULL,
+  political TEXT NOT NULL,
+  topics TEXT NOT NULL,
+  datasets TEXT NOT NULL,
+  eu_ref TEXT,
+  raw TEXT
+);
+CREATE VIRTUAL TABLE names_fts USING fts5(names_folded, content='entities', content_rowid='rowid');
+"""
+
+
+def _open(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _schema(db) -> int:
+    return db.execute("SELECT count(*) FROM entities").fetchone()[0]
+
+
+def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -> dict:
+    eu_entities = eu_entities or []
+    records = _eu_records(eu_entities) + _pep_records(pep_root)
+    new_path = db_path.with_suffix(db_path.suffix + ".new")
+    db = _open(new_path)
+    db.executescript(SCHEMA)
+    db.executemany(
+        "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, datasets, eu_ref, raw) "
+        "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :datasets, :eu_ref, :raw)",
+        [{
+            "source": r["source"],
+            "id": r["id"],
+            "caption": r["caption"],
+            "schema": r["schema"],
+            "names": json.dumps(r["names"], ensure_ascii=False),
+            "names_folded": " ".join(tokens(" ".join(r["names"]))),
+            "birth_dates": json.dumps(r["birth_dates"], ensure_ascii=False),
+            "birth_places": json.dumps(r["birth_places"], ensure_ascii=False),
+            "citizenships": json.dumps(r["citizenships"], ensure_ascii=False),
+            "political": json.dumps(r["political"], ensure_ascii=False),
+            "topics": json.dumps(r["topics"], ensure_ascii=False),
+            "datasets": json.dumps(r["datasets"], ensure_ascii=False),
+            "eu_ref": r["eu_ref"],
+            "raw": json.dumps(r["raw"], ensure_ascii=False) if r["raw"] is not None else None,
+        } for r in records],
+    )
+    for idx, r in enumerate(records):
+        names_folded = " ".join(tokens(" ".join(r["names"])))
+        db.execute("INSERT INTO names_fts (rowid, names_folded) VALUES (?, ?)", (idx + 1, names_folded))
+    db.commit()
+    db.close()
+    new_path.replace(db_path)
+    counts = {"eu_count": sum(1 for r in records if r["source"] == "eu"), "pep_count": sum(1 for r in records if r["source"] == "pep")}
+    counts["total"] = counts["eu_count"] + counts["pep_count"]
+    return counts
+
+
+def _birth_year(value: str) -> int | None:
+    match = re.match(r"(\d{4})", value)
+    return int(match.group(1)) if match else None
+
+
+def _name_score(names: list[str], query: str) -> tuple[int, str | None]:
+    best = 0
+    best_name = None
+    q = fold(query).strip()
+    q_tokens = set(tokens(q))
+    for name in names:
+        if not name:
+            continue
+        c_tokens = set(tokens(name))
+        if q_tokens and c_tokens and q_tokens <= c_tokens:
+            score = 100
+        else:
+            score = fuzz.token_set_ratio(q, fold(name))
+        if score > best:
+            best = score
+            best_name = name
+    return best, best_name
+
+
+def search(db, name, birth_year=None, nationality=None, birth_place=None, entity_type=None, threshold=THRESHOLD, max_results=MAX_RESULTS):
+    query_tokens = tokens(name)
+    if not query_tokens:
+        return []
+    match_expr = " AND ".join(f'"{t}"' for t in query_tokens)
+    rows = db.execute(
+        "SELECT e.rowid, e.source, e.id, e.caption, e.schema, e.names, e.birth_dates, e.birth_places, e.citizenships, e.political, e.topics, e.datasets, e.eu_ref, e.raw "
+        "FROM names_fts JOIN entities e ON e.rowid = names_fts.rowid WHERE names_fts MATCH ?",
+        (match_expr,),
+    ).fetchall()
+    results = []
+    for row in rows:
+        entity = {
+            "source": row["source"],
+            "id": row["id"],
+            "caption": row["caption"],
+            "schema": row["schema"],
+            "names": json.loads(row["names"]),
+            "birth_dates": json.loads(row["birth_dates"]),
+            "birth_places": json.loads(row["birth_places"]),
+            "citizenships": json.loads(row["citizenships"]),
+            "political": json.loads(row["political"]),
+            "topics": json.loads(row["topics"]),
+            "datasets": json.loads(row["datasets"]),
+            "eu_ref": row["eu_ref"],
+            "raw": json.loads(row["raw"]) if row["raw"] else None,
+        }
+        if entity_type == "person" and entity["schema"] != "Person":
+            continue
+        if entity_type == "enterprise" and entity["schema"] != "Company":
+            continue
+        n_score, matched = _name_score(entity["names"], name)
+        weights = [60]
+        details = [{"feature": "naam", "score": n_score, "label": f'Naam {n_score}% (via "{matched}")' if matched else "Naam 0%"}]
+        if birth_year is not None:
+            best = 0
+            for date in entity["birth_dates"]:
+                year = _birth_year(date)
+                if year is None:
+                    continue
+                diff = abs(birth_year - year)
+                score = 100 if diff == 0 else 75 if diff == 1 else 50 if diff == 2 else 0
+                best = max(best, score)
+            weights.append(20)
+            details.append({"feature": "geboortejaar", "score": best, "label": "Geboortejaar exact" if best == 100 else f"Geboortejaar ({best}%)"})
+        if nationality:
+            q = nationality.strip().upper()
+            best = max((100 for c in entity["citizenships"] if c.strip().upper() == q), default=0)
+            weights.append(10)
+            details.append({"feature": "nationaliteit", "score": best, "label": "Nationaliteit match" if best >= 85 else f"Nationaliteit ({best}%)"})
+        if birth_place:
+            best = max((fuzz.token_set_ratio(birth_place.strip(), fold(p)) for p in entity["birth_places"]), default=0)
+            weights.append(10)
+            details.append({"feature": "geboorteplaats", "score": best, "label": f"Geboorteplaats {best}%"})
+        total = round(sum(w * d["score"] for w, d in zip(weights, details)) / sum(weights))
+        if total < threshold:
+            continue
+        results.append({"entity": entity, "score": total, "matched_name": matched, "details": details})
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results[:max_results]
