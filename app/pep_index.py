@@ -155,10 +155,15 @@ def _name_score(names: list[str], query: str) -> tuple[int, str | None]:
     best = 0
     best_name = None
     q = _fold(query).strip()
+    q_tokens = set(_tokens(q))
     for name in names:
         if not name:
             continue
-        score = fuzz.token_set_ratio(q, _fold(name))
+        c_tokens = set(_tokens(name))
+        if q_tokens and c_tokens and q_tokens <= c_tokens:
+            score = 100
+        else:
+            score = fuzz.token_set_ratio(q, _fold(name))
         if score > best:
             best = score
             best_name = name

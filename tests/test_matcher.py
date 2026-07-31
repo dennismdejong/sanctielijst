@@ -28,6 +28,13 @@ def test_name_strong_bonus_beats_weak():
     assert strong_score >= weak_score
 
 
+def test_name_token_containment_is_100():
+    assert name_score("John Smith", [alias("John Michael Smith", strong=False)])[0] == 100
+    assert name_score("Rosneft", [alias("Rosneft Oil Company", strong=False)])[0] == 100
+    assert name_score("Vladimir Putin", [alias("Vladimir Vladimirovich PUTIN", strong=False)])[0] == 100
+    assert name_score("John Smith", [alias("Xavier Xyzzy", strong=False)])[0] < 90
+
+
 from app.matcher import (
     MAX_RESULTS,
     THRESHOLD,

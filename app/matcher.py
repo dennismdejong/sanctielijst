@@ -1,3 +1,5 @@
+import re
+import unicodedata
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz
@@ -7,6 +9,12 @@ WEIGHT_BIRTH_YEAR = 20
 WEIGHT_NATIONALITY = 10
 WEIGHT_BIRTH_PLACE = 10
 STRONG_BONUS = 1.2
+
+
+def _name_tokens(text: str) -> set[str]:
+    folded = unicodedata.normalize("NFKD", text.lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return {t for t in re.split(r"[^a-z0-9]+", folded) if len(t) >= 2}
 
 
 @dataclass
@@ -22,11 +30,16 @@ def name_score(query_name: str, aliases: list[dict]) -> tuple[int, str | None]:
     best_score = 0
     best_alias = None
     q = query_name.strip()
+    q_tokens = _name_tokens(q)
     for alias in aliases:
         candidate = alias["whole_name"] or f"{alias['first_name']} {alias['last_name']}".strip()
         if not candidate:
             continue
-        score = fuzz.token_set_ratio(q, candidate)
+        c_tokens = _name_tokens(candidate)
+        if q_tokens and c_tokens and q_tokens <= c_tokens:
+            score = 100
+        else:
+            score = fuzz.token_set_ratio(q, candidate)
         if alias["strong"]:
             score = min(100, int(score * STRONG_BONUS))
         if score > best_score:
