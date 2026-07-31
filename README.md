@@ -38,3 +38,23 @@ De app leest `OPENSANCTIONS_API_KEY` uit de omgeving of `.env`.
 ```bash
 python -m pytest -v
 ```
+
+## Wekelijks bijwerken PEP-data (OpenSanctions)
+
+Download alle individuele PEP-bronnen (~0.8 GB, `entities.ftm.json` per bron) naar `data/pep/`:
+
+```bash
+.venv/bin/python scripts/update_pep.py --once
+```
+
+- Manifest: `data/pep/manifest.json` (downloaddatum, versie, checksums, status per bron).
+- Ongewijzigde bronnen worden overgeslagen; alleen gewijzigde worden herdownload.
+- Kies een pad met `--root` of env `PEP_DATA_DIR`.
+
+**Cron (macOS/Linux), wekelijks maandag 04:00:**
+
+```cron
+0 4 * * 1 cd /pad/naar/sanctielijst && .venv/bin/python scripts/update_pep.py --once >> data/pep/update.log 2>&1
+```
+
+**Docker:** de service `pep-downloader` in `docker-compose.yml` draait hetzelfde script in loop-modus (`--interval 168`) met data op een volume.

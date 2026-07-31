@@ -1,0 +1,12 @@
+services:
+  pep-downloader:
+    build: .
+    command: ["--interval", "168"]
+    environment:
+      - PEP_DATA_DIR=/data/pep
+    volumes:
+      - pep-data:/data/pep
+    restart: unless-stopped
+
+volumes:
+  pep-data:
