@@ -24,6 +24,12 @@ uvicorn app.main:create_app --factory --port 8000
 
 Open http://localhost:8000.
 
+## PDF-export
+
+Vanuit het zoekscherm kun je resultaten exporteren als PDF-rapport (`GET /api/search/export`). Het rapport bevat de zoekopdracht (en optioneel de auteur), de uitvoeringsdatum/-tijd, de gebruikte dataversies (EU-lijstgeneratie en PEP-update), de resultaten met scores, bronnen en match-details, en een disclaimer.
+
+Het rapport wordt gegenereerd met **reportlab** — een nieuwe dependency in `requirements.txt` (pure Python, werkt zonder extra systeempakketten, ook in de container-image).
+
 ## OpenSanctions (optioneel)
 
 Vul een gratis API-key in (https://www.opensanctions.org/account/, vrij voor niet-commercieel gebruik):
