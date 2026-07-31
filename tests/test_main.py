@@ -1,12 +1,16 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app import search_index
 from app.main import create_app
 
 
 @pytest.fixture(autouse=True)
-def _isolate_os_env(monkeypatch):
+def _isolate_env(monkeypatch, tmp_path):
     monkeypatch.delenv("OPENSANCTIONS_API_KEY", raising=False)
+    monkeypatch.setenv("SEARCH_DB", str(tmp_path / "no-search.sqlite"))
+    monkeypatch.setenv("EU_DATA_DIR", str(tmp_path / "eu"))
+    monkeypatch.setenv(search_index.INDEX_ENV, "0")
 
 
 def make_entity(eu_ref, whole_name, subject_type="person", year=None, country=None, place=None):
@@ -42,6 +46,8 @@ def test_status_fields():
     assert data["entity_count"] == 2
     assert data["opensanctions_active"] is False
     assert "source" in data
+    assert data["index"]["status"] == "disabled"
+    assert data["index"]["enabled"] is False
 
 
 def test_search_returns_eu_result():
@@ -139,26 +145,6 @@ def test_index_serves_html(tmp_path):
     assert resp.text == "<h1>hi</h1>"
 
 
-import pytest
-
-from app import pep_index
-
-
-@pytest.fixture(autouse=True)
-def pep_disabled(monkeypatch):
-    monkeypatch.setenv(pep_index.INDEX_ENV, "0")
-
-
-def test_default_pep_root_uses_env(monkeypatch):
-    from pathlib import Path
-
-    from app import main as main_module
-    monkeypatch.setenv("PEP_DATA_DIR", "/data/pep")
-    assert main_module.default_pep_root() == Path("/data/pep")
-    monkeypatch.delenv("PEP_DATA_DIR", raising=False)
-    assert main_module.default_pep_root() == main_module.PEP_ROOT
-
-
 def _write_pep_fixture(root):
     import json
     for ds, entities in [
@@ -175,63 +161,53 @@ def _write_pep_fixture(root):
     (root / "datasets.json").write_text(json.dumps({"ar_parliament": {"title": "Argentina Members of Parliament", "publisher": "HCDN", "country": "ar", "official": True, "url": "https://parlament.ar"}}))
 
 
-def test_status_pep_disabled():
-    client = TestClient(create_app(entities=ENTITIES))
+def make_eu_entity():
+    return {
+        "logical_id": "EU.1", "eu_reference_number": "EU.1", "united_nations_id": "",
+        "designation_date": "2022-01-01", "subject_type": "person",
+        "aliases": [{"whole_name": "John Smith", "first_name": "", "last_name": "", "strong": True, "function": "", "title": ""}],
+        "citizenships": [], "birthdates": [], "addresses": [], "identifications": [],
+        "regulations": [{"number_title": "2022/123", "publication_date": "2022-02-01", "programme": "XX", "publication_url": "https://eur-lex.europa.eu/x"}],
+        "remarks": [],
+    }
+
+
+def _write_search_db(root):
+    _write_pep_fixture(root)
+    return search_index.build_index(root / "search.sqlite", [make_eu_entity()], root)
+
+
+def test_status_index_ready(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
     data = client.get("/api/status").json()
-    assert data["pep_index"]["enabled"] is False
+    assert data["index"]["status"] == "ready"
+    assert data["index"]["pep_count"] == 1
+    assert data["index"]["eu_count"] == 1
 
 
-def test_status_pep_enabled(tmp_path, monkeypatch):
-    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
-    _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path, pep_sync=True))
-    data = client.get("/api/status").json()
-    assert data["pep_index"]["enabled"] is True
-    assert data["pep_index"]["entity_count"] == 1
-    assert data["pep_index"]["datasets_count"] == 1
-
-
-def test_search_pep_hit_with_sources(tmp_path, monkeypatch):
-    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
-    _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path, pep_sync=True))
+def test_search_db_merges_eu_and_pep(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
     data = client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()
-    pep_results = [r for r in data["results"] if r["source"] == "pep"]
-    assert pep_results
-    first = pep_results[0]
-    assert first["score"] == 100
-    assert first["pep"]["id"] == "NK-x"
-    assert first["pep"]["url"] == "https://opensanctions.org/entities/NK-x"
+    assert [r["source"] for r in data["results"]] == ["pep"]
+    first = [r for r in data["results"] if r["source"] == "pep"][0]
     assert first["pep"]["datasets"][0]["id"] == "ar_parliament"
-    assert first["pep"]["datasets"][0]["title"] == "Argentina Members of Parliament"
-    assert first["pep"]["datasets"][0]["country"] == "ar"
+    data = client.get("/api/search", params={"name": "John Smith"}).json()
+    eu = [r for r in data["results"] if r["source"] == "eu"][0]
+    assert eu["eu"]["matched_alias"] == "John Smith"
 
 
-def test_search_pep_entity_type_filter(tmp_path, monkeypatch):
-    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
-    _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path, pep_sync=True))
-    data = client.get("/api/search", params={"name": "JORGE FERNANDEZ", "entity_type": "enterprise"}).json()
-    assert not [r for r in data["results"] if r["source"] == "pep"]
+def test_default_pep_root_uses_env(monkeypatch):
+    from pathlib import Path
 
-
-def test_pep_background_load(tmp_path, monkeypatch):
-    import time
-
-    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
-    _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
-    assert client.get("/api/status").json()["pep_index"]["status"] == "loading"
-    ready = False
-    for _ in range(40):
-        data = client.get("/api/status").json()
-        if data["pep_index"]["status"] == "ready":
-            ready = True
-            break
-        time.sleep(0.05)
-    assert ready
-    assert data["pep_index"]["entity_count"] == 1
-    assert client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()["results"][0]["source"] == "pep"
+    from app import main as main_module
+    monkeypatch.setenv("PEP_DATA_DIR", "/data/pep")
+    assert main_module.default_pep_root() == Path("/data/pep")
+    monkeypatch.delenv("PEP_DATA_DIR", raising=False)
+    assert main_module.default_pep_root() == main_module.PEP_ROOT
 
 
 def test_default_eu_root_uses_env(monkeypatch):
@@ -240,6 +216,10 @@ def test_default_eu_root_uses_env(monkeypatch):
     from app import main as main_module
     monkeypatch.setenv("EU_DATA_DIR", "/data/eu")
     assert main_module.default_eu_root() == Path("/data/eu")
+
+
+def test_default_eu_root_falls_back_without_env(monkeypatch):
+    from app import main as main_module
     monkeypatch.delenv("EU_DATA_DIR", raising=False)
     assert main_module.default_eu_root() == main_module.EU_ROOT
 

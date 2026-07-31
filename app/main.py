@@ -1,4 +1,5 @@
 import dataclasses
+import json
 import logging
 import os
 import threading
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import eu_ingest, ingest, matcher, opensanctions
-from . import pep_index
+from . import search_index
 
 load_dotenv()
 
@@ -33,6 +34,13 @@ def default_eu_root() -> Path:
 EU_ROOT = default_eu_root()
 
 
+def default_search_db() -> Path:
+    return search_index.default_db_path()
+
+
+SEARCH_DB = default_search_db()
+
+
 def _data_age_hours(downloaded_at: str | None) -> float | None:
     if not downloaded_at:
         return None
@@ -44,7 +52,38 @@ def _data_age_hours(downloaded_at: str | None) -> float | None:
     except (ValueError, TypeError):
         return None
 
-def _serialize_eu_result(result: matcher.EuMatchResult, query_name: str) -> dict:
+def _serialize_eu_result(result: dict, query_name: str) -> dict:
+    entity = result["entity"]
+    raw = entity.get("raw") or {}
+    aliases = [a["whole_name"] for a in raw.get("aliases", []) if a.get("whole_name")]
+    return {
+        "source": "eu",
+        "score": result["score"],
+        "entity": {
+            "name": result["matched_name"] or query_name,
+            "eu_reference_number": raw.get("eu_reference_number", entity.get("eu_ref", "")),
+            "united_nations_id": raw.get("united_nations_id", ""),
+            "subject_type": raw.get("subject_type", ""),
+            "designation_date": raw.get("designation_date", ""),
+            "aliases": aliases,
+            "citizenships": raw.get("citizenships", []),
+            "birthdates": raw.get("birthdates", []),
+            "addresses": raw.get("addresses", []),
+            "identifications": raw.get("identifications", []),
+            "regulations": raw.get("regulations", []),
+            "function": next((a["function"] for a in raw.get("aliases", []) if a.get("function")), ""),
+            "remarks": raw.get("remarks", []),
+        },
+        "eu": {
+            "total_score": result["score"],
+            "matched_alias": result["matched_name"],
+            "details": result["details"],
+        },
+        "opensanctions": None,
+    }
+
+
+def _serialize_eu_result_from_dict(result: matcher.EuMatchResult, query_name: str) -> dict:
     entity = result.entity
     return {
         "source": "eu",
@@ -95,18 +134,17 @@ def _serialize_os_result(result: dict) -> dict:
 
 
 def _pep_enabled(pep_root: Path) -> bool:
-    env = os.environ.get(pep_index.INDEX_ENV)
+    env = os.environ.get(search_index.INDEX_ENV)
     if env is not None:
         return env.strip().lower() not in ("0", "false", "no")
     return pep_root.exists()
 
 
-def _serialize_pep_result(result: dict, index: dict) -> dict:
+def _serialize_pep_result(result: dict, datasets_meta: dict) -> dict:
     entity = result["entity"]
-    ds_meta = index.get("datasets_meta", {})
     datasets = []
-    for ds_id in entity["datasets"]:
-        meta = ds_meta.get(ds_id, {})
+    for ds_id in entity.get("datasets", []):
+        meta = datasets_meta.get(ds_id, {})
         datasets.append({
             "id": ds_id,
             "title": meta.get("title") or ds_id,
@@ -117,17 +155,17 @@ def _serialize_pep_result(result: dict, index: dict) -> dict:
         "source": "pep",
         "score": result["score"],
         "entity": {
-            "name": entity["caption"],
-            "schema": entity["schema"],
-            "birth_dates": entity["birth_dates"],
-            "birth_places": entity["birth_places"],
-            "citizenships": entity["citizenships"],
-            "political": entity["political"],
-            "topics": entity["topics"],
+            "name": entity.get("caption", ""),
+            "schema": entity.get("schema", ""),
+            "birth_dates": entity.get("birth_dates", []),
+            "birth_places": entity.get("birth_places", []),
+            "citizenships": entity.get("citizenships", []),
+            "political": entity.get("political", []),
+            "topics": entity.get("topics", []),
         },
         "pep": {
-            "id": entity["id"],
-            "url": f"https://opensanctions.org/entities/{entity['id']}",
+            "id": entity.get("id", ""),
+            "url": f"https://opensanctions.org/entities/{entity.get('id', '')}",
             "datasets": datasets,
             "matched_name": result["matched_name"],
             "details": result["details"],
@@ -137,30 +175,51 @@ def _serialize_pep_result(result: dict, index: dict) -> dict:
     }
 
 
-def _load_pep_index(state: dict, pep_root: Path) -> None:
+def _load_datasets_meta(pep_root: Path) -> dict:
+    path = pep_root / "datasets.json"
+    if not path.exists():
+        return {}
     try:
-        state["pep"] = pep_index.load_or_build_index(pep_root)
+        data = json.loads(path.read_text())
     except Exception:
-        logger.exception("PEP-index laden mislukt")
-        state["pep"] = None
-    finally:
-        state["pep_loading"] = False
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _build_index(state: dict, db_path: Path, eu_xml: Path, pep_root: Path) -> None:
+    try:
+        search_index.rebuild_index(db_path, eu_xml, pep_root)
+        db = search_index._open(db_path)
+        try:
+            state["index_stats"] = search_index.load_stats(db)
+        finally:
+            db.close()
+        state["index_status"] = "ready"
+        state["index_error"] = None
+    except Exception:
+        logger.exception("Index-rebuild mislukt")
+        state["index_status"] = "error"
+        state["index_error"] = "Index-rebuild mislukt"
 
 
 def create_app(
     entities: list[dict] | None = None,
     os_api_key: str | None = None,
-    eu_root: Path = EU_ROOT,
-    static_dir: Path = STATIC_DIR,
-    pep_root: Path = PEP_ROOT,
+    eu_root: Path | None = None,
+    static_dir: Path | None = None,
+    pep_root: Path | None = None,
     pep_sync: bool | None = None,
+    search_db: Path | None = None,
 ) -> FastAPI:
+    eu_root = eu_root or default_eu_root()
+    static_dir = static_dir or STATIC_DIR
+    pep_root = pep_root or default_pep_root()
     meta = eu_ingest.load_eu_manifest(eu_root)
+    eu_xml = eu_root / eu_ingest.XML_FILENAME
     if entities is None:
-        xml_path = eu_root / eu_ingest.XML_FILENAME
-        if xml_path.exists():
+        if eu_xml.exists():
             try:
-                entities = ingest.parse_export(xml_path.read_bytes())
+                entities = ingest.parse_export(eu_xml.read_bytes())
             except Exception:
                 logger.exception("EU XML ongeldig")
                 entities = []
@@ -174,13 +233,22 @@ def create_app(
         os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
     if pep_sync is None:
         pep_sync = os.environ.get("PEP_INDEX_SYNC", "").strip().lower() in ("1", "true", "yes")
-    state = {"entities": entities, "meta": meta, "pep": None, "pep_loading": False}
-    if _pep_enabled(pep_root):
-        if pep_sync:
-            state["pep"] = pep_index.load_or_build_index(pep_root)
+    db_path = search_db if search_db is not None else default_search_db()
+    enabled = _pep_enabled(pep_root) or eu_xml.exists()
+    state = {"db_path": db_path, "index_status": "disabled", "index_stats": None, "index_error": None, "entities": entities, "meta": meta}
+    datasets_meta = _load_datasets_meta(pep_root)
+    if enabled:
+        result = search_index.ensure_index(db_path, eu_xml, pep_root)
+        if result["ready"]:
+            state["index_status"] = "ready"
+            state["index_stats"] = result["stats"]
+            if result.get("db") is not None:
+                result["db"].close()
+        elif pep_sync:
+            _build_index(state, db_path, eu_xml, pep_root)
         else:
-            state["pep_loading"] = True
-            threading.Thread(target=_load_pep_index, args=(state, pep_root), daemon=True).start()
+            state["index_status"] = "building"
+            threading.Thread(target=_build_index, args=(state, db_path, eu_xml, pep_root), daemon=True).start()
     opensanctions_active = bool(os_api_key)
 
     app = FastAPI(title="Compliance Zoeker")
@@ -195,22 +263,22 @@ def create_app(
 
     def _status() -> dict:
         meta = state["meta"]
-        pep = state["pep"]
-        pep_status = "loading" if state["pep_loading"] else ("ready" if pep is not None else "disabled")
+        stats = state["index_stats"] or {}
         return {
             "version": os.environ.get("APP_VERSION", "dev"),
             "cached_at": meta.get("downloaded_at"),
             "generated_at": meta.get("generation_date"),
-            "entity_count": len(state["entities"]),
+            "entity_count": stats.get("total", len(state["entities"])),
             "data_age_hours": _data_age_hours(meta.get("downloaded_at")),
             "opensanctions_active": opensanctions_active,
             "source": meta.get("status", "unknown"),
-            "pep_index": {
-                "enabled": pep is not None or state["pep_loading"],
-                "entity_count": len(pep.get("entities", [])) if pep else 0,
-                "datasets_count": len(pep.get("datasets", {})) if pep else 0,
-                "source": pep.get("source") if pep else None,
-                "status": pep_status,
+            "index": {
+                "enabled": state["index_status"] != "disabled",
+                "status": state["index_status"],
+                "eu_count": stats.get("eu_count", 0),
+                "pep_count": stats.get("pep_count", 0),
+                "source_count": stats.get("source_count", 0),
+                "error": state["index_error"],
             },
         }
 
@@ -223,9 +291,11 @@ def create_app(
         try:
             manifest = eu_ingest.refresh_eu(eu_root)
             state["meta"] = manifest
-            xml_path = eu_root / eu_ingest.XML_FILENAME
-            if xml_path.exists():
-                state["entities"] = ingest.parse_export(xml_path.read_bytes())
+            if eu_xml.exists():
+                state["entities"] = ingest.parse_export(eu_xml.read_bytes())
+            if state["index_status"] != "disabled":
+                state["index_status"] = "building"
+                threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
             return _status()
         except Exception:
             logger.exception("Verversen mislukt")
@@ -250,18 +320,21 @@ def create_app(
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results = []
         warnings = []
-        for r in matcher.search_eu(state["entities"], query):
-            results.append(_serialize_eu_result(r, query.name))
-        if state["pep"] is not None:
-            for r in pep_index.search_pep(
-                state["pep"],
-                query.name,
-                query.birth_year,
-                query.nationality,
-                query.birth_place,
-                query.entity_type,
-            ):
-                results.append(_serialize_pep_result(r, state["pep"]))
+        if state["index_status"] == "ready":
+            db = search_index._open(state["db_path"])
+            try:
+                for r in search_index.search(db, query.name, query.birth_year, query.nationality, query.birth_place, query.entity_type):
+                    if r["entity"]["source"] == "eu":
+                        results.append(_serialize_eu_result(r, query.name))
+                    else:
+                        results.append(_serialize_pep_result(r, datasets_meta))
+            finally:
+                db.close()
+        elif state["index_status"] == "building":
+            warnings.append("Zoekindex wordt opgebouwd; probeer het zo nog eens")
+        else:
+            for r in matcher.search_eu(state["entities"], query):
+                results.append(_serialize_eu_result_from_dict(r, query.name))
         if opensanctions_active:
             try:
                 for r in opensanctions.match_opensanctions(
