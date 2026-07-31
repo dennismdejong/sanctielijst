@@ -11,6 +11,8 @@ def _isolate_env(monkeypatch, tmp_path):
     monkeypatch.setenv("SEARCH_DB", str(tmp_path / "no-search.sqlite"))
     monkeypatch.setenv("EU_DATA_DIR", str(tmp_path / "eu"))
     monkeypatch.setenv(search_index.INDEX_ENV, "0")
+    monkeypatch.setenv("AUDIT_DB", str(tmp_path / "audit.sqlite"))
+    monkeypatch.delenv("AUDIT_ADMIN_TOKEN", raising=False)
 
 
 def make_entity(eu_ref, whole_name, subject_type="person", year=None, country=None, place=None):
@@ -386,3 +388,98 @@ def test_export_empty_results(tmp_path, monkeypatch):
     resp = client.get("/api/search/export", params={"name": "Zzqqq Xxww"})
     assert resp.status_code == 200
     assert b"Geen overeenkomsten" in _decoded_text(resp.content)
+
+
+def _last_audit_events(tmp_path):
+    from app import audit
+
+    return audit.list_events(tmp_path / "audit.sqlite")
+
+
+def test_search_logs_audit_event(tmp_path):
+    from app import matcher
+
+    client = TestClient(create_app(entities=ENTITIES))
+    client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    events = _last_audit_events(tmp_path)
+    assert len(events) == 1
+    event = events[0]
+    assert event["ip"] == "testclient"
+    assert event["user"] is None
+    assert event["method"] == "GET"
+    assert event["path"] == "/api/search"
+    assert event["query"] == {"name": "Abdul Hai Hazem", "birth_year": None, "nationality": None, "birth_place": None, "entity_type": None}
+    assert event["result_count"] >= 1
+    assert event["sources"] == ["eu"]
+    assert event["threshold"] == matcher.THRESHOLD
+    assert event["user_agent"]
+
+
+def test_search_logs_empty_results(tmp_path):
+    client = TestClient(create_app(entities=ENTITIES))
+    client.get("/api/search", params={"name": "Zzq Qqxx"})
+    event = _last_audit_events(tmp_path)[0]
+    assert event["result_count"] == 0
+    assert event["sources"] == []
+
+
+def test_export_logs_audit_event(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.get("/api/search/export", params={"name": "JORGE FERNANDEZ"})
+    assert resp.status_code == 200
+    event = _last_audit_events(tmp_path)[0]
+    assert event["path"] == "/api/search/export"
+    assert event["result_count"] >= 1
+
+
+def test_audit_endpoint_disabled_without_token():
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/audit")
+    assert resp.status_code == 404
+
+
+def test_audit_endpoint_401_without_or_bad_token(monkeypatch):
+    monkeypatch.setenv("AUDIT_ADMIN_TOKEN", "secret")
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/audit").status_code == 401
+    assert client.get("/api/audit", headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+
+def test_audit_endpoint_returns_events_with_token(monkeypatch):
+    monkeypatch.setenv("AUDIT_ADMIN_TOKEN", "secret")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    resp = client.get("/api/audit", headers={"Authorization": "Bearer secret"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert len(data["events"]) == 1
+    assert data["events"][0]["ip"] == "testclient"
+    assert data["events"][0]["query"]["name"] == "Abdul Hai Hazem"
+
+
+def test_audit_endpoint_pagination(monkeypatch):
+    monkeypatch.setenv("AUDIT_ADMIN_TOKEN", "secret")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    client.get("/api/search", params={"name": "Rosneft"})
+    resp = client.get("/api/audit", params={"limit": 1, "offset": 1}, headers={"Authorization": "Bearer secret"})
+    data = resp.json()
+    assert data["total"] == 2
+    assert len(data["events"]) == 1
+
+
+def test_audit_failure_does_not_break_search(monkeypatch):
+    import app.audit as audit_module
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("disk vol")
+
+    monkeypatch.setattr(audit_module, "log_event", boom)
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    assert resp.status_code == 200
+    assert resp.json()["results"]

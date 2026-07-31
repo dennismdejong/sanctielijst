@@ -77,6 +77,13 @@ def log_event(
         conn.commit()
 
 
+def count_events(db_path: Path) -> int:
+    init_audit_db(db_path)
+    with _open(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM audit_log").fetchone()
+    return row["n"]
+
+
 def list_events(db_path: Path, limit: int = 100, offset: int = 0) -> list[dict]:
     init_audit_db(db_path)
     with _open(db_path) as conn:

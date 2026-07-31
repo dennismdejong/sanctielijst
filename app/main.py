@@ -7,10 +7,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import audit
 from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_ingest
 from . import search_index
@@ -236,6 +237,8 @@ def create_app(
     if pep_sync is None:
         pep_sync = os.environ.get("PEP_INDEX_SYNC", "").strip().lower() in ("1", "true", "yes")
     db_path = search_db if search_db is not None else default_search_db()
+    audit_db = audit.default_audit_db()
+    audit_admin_token = (os.environ.get("AUDIT_ADMIN_TOKEN") or "").strip()
     enabled = _pep_enabled(pep_root) or eu_xml.exists()
     state = {"db_path": db_path, "index_status": "disabled", "index_stats": None, "index_error": None, "entities": entities, "meta": meta, "build_lock": threading.Lock()}
     datasets_meta = _load_datasets_meta(pep_root)
@@ -344,8 +347,38 @@ def create_app(
         results = results[:matcher.MAX_RESULTS]
         return results, warnings
 
+    def _log_search(request: Request, query: matcher.SearchQuery, results: list[dict], warnings: list[str], user: str | None = None) -> None:
+        try:
+            audit.log_event(
+                audit_db,
+                ip=request.client.host if request.client else "",
+                user=user,
+                user_agent=request.headers.get("user-agent", ""),
+                method=request.method,
+                path=request.url.path,
+                query=dataclasses.asdict(query),
+                result_count=len(results),
+                sources=sorted({r["source"] for r in results}),
+                threshold=matcher.THRESHOLD,
+            )
+        except Exception:
+            logger.warning("Audit-log mislukt", exc_info=True)
+
+    @app.get("/api/audit")
+    def audit_events(
+        limit: int = Query(100, ge=1, le=1000),
+        offset: int = Query(0, ge=0),
+        authorization: str | None = Header(None),
+    ):
+        if not audit_admin_token:
+            raise HTTPException(status_code=404, detail="Audit-endpoint uitgeschakeld")
+        if authorization != f"Bearer {audit_admin_token}":
+            raise HTTPException(status_code=401, detail="Niet geautoriseerd")
+        return {"events": audit.list_events(audit_db, limit=limit, offset=offset), "total": audit.count_events(audit_db)}
+
     @app.get("/api/search")
     def search(
+        request: Request,
         name: str = Query(..., min_length=1),
         birth_year: int | None = Query(None, ge=1900, le=2100),
         nationality: str | None = None,
@@ -362,6 +395,7 @@ def create_app(
         if not query.name:
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
+        _log_search(request, query, results, warnings)
         return {
             "query": {
                 "name": query.name,
@@ -377,6 +411,7 @@ def create_app(
 
     @app.get("/api/search/export")
     def search_export(
+        request: Request,
         name: str = Query(..., min_length=1),
         birth_year: int | None = Query(None, ge=1900, le=2100),
         nationality: str | None = None,
@@ -388,6 +423,7 @@ def create_app(
         if not query.name:
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
+        _log_search(request, query, results, warnings)
         now = datetime.now().astimezone()
         generated = now.strftime("%Y-%m-%d %H:%M %Z")
         payload = {

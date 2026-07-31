@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .env
 data/*.xml
+data/*.sqlite
 data/cache_meta.json
 data/pep/
 data/eu/
