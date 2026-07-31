@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sanctielijst Zoeker</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="hero">
+    <h1>Sanctielijst Zoeker</h1>
+    <p>Zoek personen en bedrijven in de EU sanctielijsten.</p>
+  </header>
+  <main>
+    <section class="search-panel">
+      <form id="search-form">
+        <div class="field">
+          <label for="name">Naam <span class="required">*</span></label>
+          <input type="text" id="name" name="name" required autocomplete="off" placeholder="bijv. Abdul Hai Hazem">
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="birth_year">Geboortejaar</label>
+            <input type="number" id="birth_year" name="birth_year" min="1900" max="2100" placeholder="bijv. 1971">
+          </div>
+          <div class="field">
+            <label for="entity_type">Type</label>
+            <select id="entity_type" name="entity_type">
+              <option value="">Alle</option>
+              <option value="person">Persoon</option>
+              <option value="enterprise">Bedrijf</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="nationality">Nationaliteit</label>
+            <input type="text" id="nationality" name="nationality" placeholder="bijv. Afghanistan of AF">
+          </div>
+          <div class="field">
+            <label for="birth_place">Geboorteplaats</label>
+            <input type="text" id="birth_place" name="birth_place" placeholder="bijv. Kabul">
+          </div>
+        </div>
+        <button type="submit" id="search-btn">Zoeken</button>
+      </form>
+      <p id="status-line" class="status-line" role="status"></p>
+    </section>
+    <section id="warnings" class="warnings" hidden></section>
+    <section id="results" class="results" aria-live="polite"></section>
+    <section id="empty-state" class="empty" hidden>
+      <p>Geen overeenkomsten gevonden. Probeer een andere schrijfwijze of vul meer kenmerken in.</p>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
