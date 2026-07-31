@@ -752,7 +752,7 @@ class EuMatchResult:
 def birth_year_score(query_year: int, birthdates: list[dict]) -> int:
     best = 0
     for b in birthdates:
-        if b["year"] is not None:
+        if b.get("year") is not None:
             diff = abs(query_year - b["year"])
             if diff == 0:
                 score = 100
@@ -795,7 +795,8 @@ def birth_place_score(query: str, birthdates: list[dict]) -> int:
     for b in birthdates:
         for candidate in (b["place"], b["city"]):
             if candidate:
-                best = max(best, fuzz.token_set_ratio(q, candidate))
+                score = fuzz.token_set_ratio(q, candidate)
+                best = max(best, score if score >= 70 else 0)
     return best
 
 
