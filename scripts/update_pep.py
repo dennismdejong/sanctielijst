@@ -18,6 +18,7 @@ def parse_args(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="plan alleen tonen, niets downloaden")
     parser.add_argument("--limit", type=int, default=None, help="maximaal aantal bronnen (testen)")
     parser.add_argument("--interval", type=float, default=0, help="blijf draaien, update elke N uren (Docker)")
+    parser.add_argument("--once", action="store_true", help="eenmalig draaien (default)")
     parser.add_argument("--log", default=None, help="schrijf logs ook naar dit bestand")
     return parser.parse_args(argv)
 
@@ -77,7 +78,7 @@ def run_loop(args) -> int:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    if args.interval and args.interval > 0:
+    if args.interval and args.interval > 0 and not args.once:
         return run_loop(args)
     return run_once(args)
 

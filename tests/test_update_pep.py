@@ -24,6 +24,29 @@ def test_parse_args_defaults():
     assert Path(args.root) == Path("data/pep")
 
 
+def test_parse_args_once_flag():
+    assert cli.parse_args(["--once"]).once is True
+    assert cli.parse_args([]).once is False
+
+
+def test_main_once_flag_overrides_interval(monkeypatch):
+    calls = {"once": 0, "loop": 0}
+
+    def fake_run_once(args):
+        calls["once"] += 1
+        return 0
+
+    def fake_run_loop(args):
+        calls["loop"] += 1
+        return 1
+
+    monkeypatch.setattr(cli, "run_once", fake_run_once)
+    monkeypatch.setattr(cli, "run_loop", fake_run_loop)
+    assert cli.main(["--once", "--interval", "168"]) == 0
+    assert calls["once"] == 1
+    assert calls["loop"] == 0
+
+
 def test_run_once_success(monkeypatch, capsys):
     manifest = make_manifest(stats={"total": 189, "downloaded": 3, "skipped": 185, "failed": 1, "bytes": 10})
     monkeypatch.setattr(cli.pep_ingest, "fetch_index", lambda: {"datasets": []})
