@@ -125,6 +125,8 @@ button:hover { opacity: 0.9; }
 .chip-ok { background: #dafbe1; color: var(--ok); border-color: var(--ok); }
 .chip-warn { background: #fff8c5; color: var(--warn); border-color: var(--warn); }
 .chip-bad { background: #ffebe9; color: var(--bad); border-color: var(--bad); }
+.badge-pep { background: #7c3aed; }
+.chip-pep { background: #ede9fe; color: #5b21b6; border-color: #7c3aed; }
 
 .empty {
   background: #fff;

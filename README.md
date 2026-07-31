@@ -1,6 +1,6 @@
-# Sanctielijst Zoeker
+# Compliance Zoeker
 
-Web-app om te zoeken in de EU sanctielijsten (personen en bedrijven), met fuzzy matching en per-kenmerk uitleg waarom een resultaat matcht. Optioneel ook wereldwijde screening via de OpenSanctions `/match`-API.
+Web-app om te zoeken in de EU sanctielijsten (personen en bedrijven) én de OpenSanctions PEP-data (politiek prominente personen), met fuzzy matching en per-kenmerk uitleg waarom een resultaat matcht. Optioneel ook wereldwijde screening via de OpenSanctions `/match`-API.
 
 ## Installatie
 
@@ -13,6 +13,8 @@ pip install -r requirements.txt
 ## Data
 
 Bij de eerste start downloadt de app de EU sanctielijst (XML 1.1, ~25 MB) van `data.europa.eu` en cacht deze in `data/`. De cache wordt automatisch ververst als deze ouder is dan 24 uur. Forceer verversen via `POST /api/refresh`.
+
+Daarnaast zoekt de app in de PEP-index in `data/pep/` (OpenSanctions PEP-bronnen, zie "Wekelijks bijwerken PEP-data"). De index wordt automatisch gebouwd en gecacht (pickle) bij de eerste start en ververst bij `POST /api/refresh`. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat).
 
 ## Starten
 

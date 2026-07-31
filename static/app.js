@@ -81,6 +81,40 @@ function osCard(item) {
     </article>`;
 }
 
+function pepCard(item) {
+  const pep = item.pep;
+  const entity = item.entity;
+  const chips = (pep.details || []).map((d) => {
+    const tone = d.score >= 85 ? "ok" : d.score >= 50 ? "warn" : "bad";
+    return chip(d.label, tone);
+  }).join("");
+  const dsChips = (pep.datasets || []).slice(0, 5).map((d) =>
+    `<a class="chip chip-pep" href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.title)}${d.country ? " · " + escapeHtml(d.country.toUpperCase()) : ""}</a>`
+  ).join("");
+  const topics = (entity.topics || []).slice(0, 4).map((t) => chip(t, "warn")).join("");
+  const political = (entity.political || []).length
+    ? `<p class="muted">Partij/fractie: ${entity.political.map(escapeHtml).join(", ")}</p>` : "";
+  const births = (entity.birth_dates || []).slice(0, 2).map(escapeHtml).join(", ");
+  const birthLine = births ? `<p class="muted">Geboren: ${births}</p>` : "";
+  const natLine = (entity.citizenships || []).length
+    ? `<p class="muted">Nationaliteit: ${entity.citizenships.map((c) => escapeHtml(c.toUpperCase())).join(", ")}</p>` : "";
+  return `
+    <article class="card card-pep">
+      <div class="card-head">
+        <h2>${escapeHtml(entity.name)}</h2>
+        <span class="badge badge-pep">PEP</span>
+      </div>
+      <p class="ref">Schema: ${escapeHtml(entity.schema || "-")}</p>
+      <p class="score-line">Totaalscore: <strong>${item.score}</strong>/100 ${chips}</p>
+      ${birthLine}
+      ${natLine}
+      ${political}
+      ${topics ? `<p class="muted">Risico-tags: ${topics}</p>` : ""}
+      ${dsChips ? `<p class="muted">Bronnen: ${dsChips}</p>` : ""}
+      <p class="muted"><a href="${escapeHtml(pep.url)}" target="_blank" rel="noopener">Open op opensanctions.org</a></p>
+    </article>`;
+}
+
 function renderResults(data) {
   resultsEl.innerHTML = "";
   warningsEl.hidden = true;
@@ -95,7 +129,10 @@ function renderResults(data) {
   }
   emptyEl.hidden = true;
   data.results.forEach((item) => {
-    const html = item.source === "opensanctions" ? osCard(item) : euCard(item);
+    let html;
+    if (item.source === "opensanctions") html = osCard(item);
+    else if (item.source === "pep") html = pepCard(item);
+    else html = euCard(item);
     resultsEl.insertAdjacentHTML("beforeend", html);
   });
 }
@@ -119,6 +156,9 @@ async function loadStatus() {
       s.source === "fresh" ? "data vers" : "data gecachet",
       s.opensanctions_active ? "OpenSanctions actief" : "OpenSanctions niet actief",
     ];
+    if (s.pep_index && s.pep_index.enabled) {
+      parts.push(`${s.pep_index.entity_count.toLocaleString("nl-NL")} PEP-records`);
+    }
     statusLine.textContent = parts.join(" · ");
   } catch {
     statusLine.textContent = "Status niet beschikbaar";
