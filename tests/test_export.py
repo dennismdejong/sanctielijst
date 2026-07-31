@@ -1,9 +1,12 @@
+import csv
 import re
 import zlib
+from io import BytesIO, StringIO
 
+import openpyxl
 from reportlab.pdfbase.pdfutils import asciiBase85Decode
 
-from app.export import render_search_pdf, _escape
+from app.export import render_search_pdf, _escape, _export_rows, render_search_csv, render_search_xlsx
 
 
 def _payload(**over):
@@ -175,3 +178,105 @@ def test_render_filled_query_fields():
     assert b"Nationaliteit: AR" in text
     assert b"Geboorteplaats: Buenos Aires" in text
     assert b"Type: person" in text
+
+
+def test_export_rows_pep():
+    rows = _export_rows(_payload()["results"])
+    assert rows == [[
+        "JORGE FERNÁNDEZ", "100", "PEP", "Argentina Members of Parliament",
+        'Naam 100% (via "JORGE FERNÁNDEZ")', "", "1965-03-01", "ar",
+        "https://opensanctions.org/entities/NK-1",
+    ]]
+
+
+def test_export_rows_eu():
+    result = {
+        "source": "eu",
+        "score": 92,
+        "entity": {
+            "name": "ALIAS BV",
+            "eu_reference_number": "EU.123",
+            "birthdates": [
+                {"date": "", "year": "1971", "place": "Kabul", "city": ""},
+                {"date": "1965-03-01", "year": "", "place": "", "city": ""},
+            ],
+            "citizenships": [{"description": "Russian Federation", "iso2": "RU"}],
+        },
+        "eu": {"matched_alias": "Alias One", "details": [{"feature": "naam", "score": 92, "label": 'Naam 92% (via "ALIAS BV")'}]},
+        "opensanctions": None,
+        "pep": None,
+    }
+    rows = _export_rows([result])
+    assert rows == [["ALIAS BV", "92", "EU", "", 'Naam 92% (via "ALIAS BV")', "EU.123", "1971/1965-03-01", "Russian Federation", ""]]
+
+
+def test_export_rows_opensanctions():
+    result = {
+        "source": "opensanctions",
+        "score": 80,
+        "entity": {"name": "JORGE FERNÁNDEZ", "schema": "Person", "birthdates": [], "citizenships": []},
+        "eu": None,
+        "pep": None,
+        "opensanctions": {"url": "https://opensanctions.org/entities/NK-9", "datasets": ["eu_fsf"]},
+    }
+    rows = _export_rows([result])
+    assert rows == [["JORGE FERNÁNDEZ", "80", "OpenSanctions", "eu_fsf", "", "", "", "", "https://opensanctions.org/entities/NK-9"]]
+
+
+def test_export_rows_empty():
+    assert _export_rows([]) == []
+
+
+def test_render_csv_has_bom_header_and_data_row():
+    text = render_search_csv(_payload()["results"], _payload()["query"])
+    assert text.startswith("\ufeff")
+    lines = text.lstrip("\ufeff").rstrip("\r\n").split("\r\n")
+    assert len(lines) == 2
+    assert lines[0] == "naam;score;bron;datasets;match-details;eu_referentie;geboortedata;nationaliteit;links"
+    assert "JORGE FERNÁNDEZ" in lines[1]
+    assert "1965-03-01" in lines[1]
+
+
+def test_render_csv_special_chars_roundtrip():
+    results = _payload()["results"]
+    results[0]["pep"]["details"] = [
+        {"feature": "naam", "score": 100, "label": 'Naam 100% (via "JORGE FERNÁNDEZ")'},
+        {"feature": "land", "score": 90, "label": "Land 90%; via AR"},
+    ]
+    text = render_search_csv(results, _payload()["query"])
+    assert "\ufeff" in text
+    assert "\r\n" in text
+    parsed = list(csv.reader(StringIO(text.lstrip("\ufeff")), delimiter=";"))
+    assert parsed[0] == ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
+    assert parsed[1][0] == "JORGE FERNÁNDEZ"
+    assert parsed[1][4] == 'Naam 100% (via "JORGE FERNÁNDEZ");Land 90%; via AR'
+
+
+def test_render_csv_empty_results_header_only():
+    text = render_search_csv([], _payload()["query"])
+    assert text.startswith("\ufeff")
+    lines = text.lstrip("\ufeff").rstrip("\r\n").split("\r\n")
+    assert lines == ["naam;score;bron;datasets;match-details;eu_referentie;geboortedata;nationaliteit;links"]
+
+
+def test_render_xlsx_magic_cells_and_widths():
+    data = render_search_xlsx(_payload()["results"], _payload()["query"])
+    assert data[:2] == b"PK"
+    wb = openpyxl.load_workbook(BytesIO(data))
+    ws = wb.active
+    assert [c.value for c in ws[1]] == ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
+    assert ws.cell(row=1, column=1).font.bold
+    row = [c.value for c in ws[2]]
+    assert row[0] == "JORGE FERNÁNDEZ"
+    assert row[1] == "100"
+    assert row[2] == "PEP"
+    assert row[8] == "https://opensanctions.org/entities/NK-1"
+    assert ws.column_dimensions["A"].width > 10
+
+
+def test_render_xlsx_empty_results_header_only():
+    data = render_search_xlsx([], _payload()["query"])
+    wb = openpyxl.load_workbook(BytesIO(data))
+    ws = wb.active
+    assert [c.value for c in ws[1]] == ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
+    assert ws.max_row == 1

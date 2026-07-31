@@ -1,5 +1,8 @@
-from io import BytesIO
+import csv
+from io import BytesIO, StringIO
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
@@ -151,4 +154,75 @@ def render_search_pdf(payload: dict) -> bytes:
     story.append(Spacer(1, 6 * mm))
     story.append(Paragraph(f"<i>{_DISCLAIMER}</i>", body))
     doc.build(story)
+    return buffer.getvalue()
+
+
+_EXPORT_HEADERS = ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
+_EXPORT_BRONLABELS = {"eu": "EU", "pep": "PEP", "opensanctions": "OpenSanctions"}
+_EXPORT_COLUMN_WIDTHS = {"A": 28, "B": 8, "C": 14, "D": 30, "E": 42, "F": 18, "G": 26, "H": 18, "I": 46}
+
+
+def _export_rows(results: list[dict]) -> list[list[str]]:
+    rows = []
+    for result in results:
+        entity = result.get("entity") or {}
+        source = result.get("source", "")
+        pep = result.get("pep")
+        eu = result.get("eu")
+        os_result = result.get("opensanctions")
+        details = []
+        datasets = []
+        birth_dates = []
+        citizenships = []
+        link = ""
+        if pep:
+            details = [d.get("label", "") for d in (pep.get("details") or []) if d.get("label")]
+            datasets = [d.get("title") or d.get("id") for d in (pep.get("datasets") or []) if d]
+            birth_dates = entity.get("birth_dates") or []
+            citizenships = entity.get("citizenships") or []
+            link = pep.get("url", "")
+        elif eu:
+            details = [d.get("label", "") for d in (eu.get("details") or []) if d.get("label")]
+            birth_dates = [b.get("date") or b.get("year") for b in (entity.get("birthdates") or []) if isinstance(b, dict)]
+            citizenships = [c.get("description") or c.get("iso2") for c in (entity.get("citizenships") or []) if isinstance(c, dict)]
+        elif os_result:
+            datasets = os_result.get("datasets") or []
+            birth_dates = [b.get("date") or b.get("year") for b in (entity.get("birthdates") or []) if isinstance(b, dict)]
+            citizenships = [c.get("description") or c.get("iso2") for c in (entity.get("citizenships") or []) if isinstance(c, dict)]
+            link = os_result.get("url", "")
+        rows.append([
+            entity.get("name", ""),
+            str(result.get("score", 0)),
+            _EXPORT_BRONLABELS.get(source, source),
+            ";".join(str(x) for x in datasets if x),
+            ";".join(str(x) for x in details if x),
+            str(entity.get("eu_reference_number", "")),
+            "/".join(str(x) for x in birth_dates if x),
+            ";".join(str(x) for x in citizenships if x),
+            str(link),
+        ])
+    return rows
+
+
+def render_search_csv(results: list[dict], query: dict) -> str:
+    output = StringIO()
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+    writer.writerow(_EXPORT_HEADERS)
+    writer.writerows(_export_rows(results))
+    return "\ufeff" + output.getvalue()
+
+
+def render_search_xlsx(results: list[dict], query: dict) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Screening"
+    for col, header in enumerate(_EXPORT_HEADERS, start=1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.font = Font(bold=True)
+    for row in _export_rows(results):
+        ws.append(row)
+    for ref, width in _EXPORT_COLUMN_WIDTHS.items():
+        ws.column_dimensions[ref].width = width
+    buffer = BytesIO()
+    wb.save(buffer)
     return buffer.getvalue()
