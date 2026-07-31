@@ -165,6 +165,7 @@ def _serialize_pep_result(result: dict, datasets_meta: dict) -> dict:
             "citizenships": entity.get("citizenships", []),
             "political": entity.get("political", []),
             "topics": entity.get("topics", []),
+            "positions": entity.get("positions") or [],
         },
         "pep": {
             "id": entity.get("id", ""),

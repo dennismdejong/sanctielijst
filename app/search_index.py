@@ -261,7 +261,7 @@ def search(db, name, birth_year=None, nationality=None, birth_place=None, entity
         return []
     match_expr = " OR ".join(f'"{t}"' for t in query_tokens)
     rows = db.execute(
-        "SELECT e.rowid, e.source, e.id, e.caption, e.schema, e.names, e.birth_dates, e.birth_places, e.citizenships, e.political, e.topics, e.datasets, e.eu_ref, e.raw "
+        "SELECT e.rowid, e.source, e.id, e.caption, e.schema, e.names, e.birth_dates, e.birth_places, e.citizenships, e.political, e.topics, e.positions, e.datasets, e.eu_ref, e.raw "
         "FROM names_fts JOIN entities e ON e.rowid = names_fts.rowid WHERE names_fts MATCH ?",
         (match_expr,),
     ).fetchall()
@@ -278,6 +278,7 @@ def search(db, name, birth_year=None, nationality=None, birth_place=None, entity
             "citizenships": json.loads(row["citizenships"]),
             "political": json.loads(row["political"]),
             "topics": json.loads(row["topics"]),
+            "positions": json.loads(row["positions"]),
             "datasets": json.loads(row["datasets"]),
             "eu_ref": row["eu_ref"],
             "raw": json.loads(row["raw"]) if row["raw"] else None,

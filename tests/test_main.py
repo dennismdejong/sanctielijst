@@ -173,6 +173,26 @@ def _write_pep_fixture(root):
     (root / "datasets.json").write_text(json.dumps({"ar_parliament": {"title": "Argentina Members of Parliament", "publisher": "HCDN", "country": "ar", "official": True, "url": "https://parlament.ar"}}))
 
 
+def _write_pep_fixture_with_positions(root):
+    import json
+    for ds, entities in [
+        ("ar_parliament", [
+            {"id": "NK-x", "caption": "JORGE FERNÁNDEZ", "schema": "Person", "target": True, "datasets": ["ar_parliament"],
+             "properties": {"birthDate": ["1965-03-01"], "citizenship": ["ar"], "political": ["PRIMERO SAN LUIS"], "topics": ["role.pep"]}},
+            {"id": "P-1", "caption": "Minister of Defence", "schema": "Position", "target": False, "datasets": ["ar_parliament"],
+             "properties": {"name": ["Minister of Defence"]}},
+            {"id": "O-1", "caption": "Occupancy", "schema": "Occupancy", "target": False, "datasets": ["ar_parliament"],
+             "properties": {"holder": ["NK-x"], "post": ["P-1"], "status": ["current"], "startDate": ["2020-01-01"], "endDate": ["2024-01-01"]}},
+        ]),
+    ]:
+        p = root / ds / "entities.ftm.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w") as fh:
+            for e in entities:
+                fh.write(json.dumps(e) + "\n")
+    (root / "datasets.json").write_text(json.dumps({"ar_parliament": {"title": "Argentina Members of Parliament", "publisher": "HCDN", "country": "ar", "official": True, "url": "https://parlament.ar"}}))
+
+
 def make_eu_entity():
     return {
         "logical_id": "EU.1", "eu_reference_number": "EU.1", "united_nations_id": "",
@@ -273,6 +293,36 @@ def test_search_db_merges_eu_and_pep(tmp_path, monkeypatch):
     data = client.get("/api/search", params={"name": "John Smith"}).json()
     eu = [r for r in data["results"] if r["source"] == "eu"][0]
     assert eu["eu"]["matched_alias"] == "John Smith"
+
+
+def test_search_pep_result_contains_positions(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture_with_positions(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    data = client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()
+    pep = [r for r in data["results"] if r["source"] == "pep"][0]
+    assert pep["entity"]["positions"] == [
+        {"role": "Minister of Defence", "status": "current", "start": "2020-01-01", "end": "2024-01-01"}
+    ]
+
+
+def test_search_pep_result_positions_default_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    data = client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()
+    pep = [r for r in data["results"] if r["source"] == "pep"][0]
+    assert pep["entity"]["positions"] == []
+
+
+def test_search_eu_result_has_no_positions(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    data = client.get("/api/search", params={"name": "John Smith"}).json()
+    eu = [r for r in data["results"] if r["source"] == "eu"][0]
+    assert "positions" not in eu["entity"]
 
 
 def test_default_pep_root_uses_env(monkeypatch):

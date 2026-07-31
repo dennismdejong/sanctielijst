@@ -103,6 +103,12 @@ function pepCard(item) {
   const topics = (entity.topics || []).slice(0, 4).map((t) => chip(t, "warn")).join("");
   const political = (entity.political || []).length
     ? `<p class="muted">Partij/fractie: ${entity.political.map(escapeHtml).join(", ")}</p>` : "";
+  const positions = (entity.positions || []).slice(0, 5).map((p) => {
+    const bits = [p.status, [p.start, p.end].filter(Boolean).join("-")].filter(Boolean);
+    const meta = bits.length ? ` (${bits.map(escapeHtml).join(", ")})` : "";
+    return `<li>${escapeHtml(p.role || "")}${meta}</li>`;
+  }).join("");
+  const functiesLine = positions ? `<p class="muted">Functies:</p><ul class="aliases">${positions}</ul>` : "";
   const births = (entity.birth_dates || []).slice(0, 2).map(escapeHtml).join(", ");
   const birthLine = births ? `<p class="muted">Geboren: ${births}</p>` : "";
   const natLine = (entity.citizenships || []).length
@@ -118,6 +124,7 @@ function pepCard(item) {
       ${birthLine}
       ${natLine}
       ${political}
+      ${functiesLine}
       ${topics ? `<p class="muted">Risico-tags: ${topics}</p>` : ""}
       ${dsChips ? `<p class="muted">Bronnen: ${dsChips}</p>` : ""}
       <p class="muted"><a href="${escapeHtml(pep.url)}" target="_blank" rel="noopener">Open op opensanctions.org</a></p>

@@ -88,6 +88,9 @@ def _result_paragraphs(result: dict, styles) -> list:
             parts.append(Paragraph(f"Nationaliteit: {_escape(country)}", styles["body"]))
         for party in entity.get("political") or []:
             parts.append(Paragraph(f"Partij/functie: {_escape(party)}", styles["body"]))
+        for pos in (entity.get("positions") or [])[:5]:
+            period = f"{pos.get('start', '')}-{pos.get('end', '')}"
+            parts.append(Paragraph(f"Functies: {_escape(pos.get('role', ''))} ({_escape(pos.get('status', ''))}, {_escape(period)})", styles["body"]))
         for tag in entity.get("topics") or []:
             parts.append(Paragraph(f"Risico-tags: {_escape(tag)}", styles["body"]))
         for ds in result["pep"].get("datasets", []):

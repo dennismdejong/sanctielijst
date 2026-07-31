@@ -106,6 +106,22 @@ def test_render_pep_result_fields():
     assert b"role.pep" in decoded
 
 
+def test_render_pep_result_positions():
+    payload = _payload()
+    payload["results"][0]["entity"]["positions"] = [
+        {"role": "Minister van Buitenlandse Zaken", "status": "current", "start": "2021-01-01", "end": ""},
+        {"role": "Senator", "status": "ended", "start": "2015-01-01", "end": "2019-01-01"},
+    ]
+    decoded = _decoded_text(render_search_pdf(payload))
+    assert b"Functies: Minister van Buitenlandse Zaken \\(current, 2021-01-01-\\)" in decoded
+    assert b"Functies: Senator \\(ended, 2015-01-01-2019-01-01\\)" in decoded
+
+
+def test_render_pep_result_without_positions_omits_line():
+    decoded = _decoded_text(render_search_pdf(_payload()))
+    assert b"Functies:" not in decoded
+
+
 def test_render_eu_result_fields():
     payload = _payload(results=[{
         "source": "eu",
