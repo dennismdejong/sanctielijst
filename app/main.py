@@ -235,10 +235,14 @@ def create_app(
         pep_sync = os.environ.get("PEP_INDEX_SYNC", "").strip().lower() in ("1", "true", "yes")
     db_path = search_db if search_db is not None else default_search_db()
     enabled = _pep_enabled(pep_root) or eu_xml.exists()
-    state = {"db_path": db_path, "index_status": "disabled", "index_stats": None, "index_error": None, "entities": entities, "meta": meta}
+    state = {"db_path": db_path, "index_status": "disabled", "index_stats": None, "index_error": None, "entities": entities, "meta": meta, "build_lock": threading.Lock()}
     datasets_meta = _load_datasets_meta(pep_root)
     if enabled:
-        result = search_index.ensure_index(db_path, eu_xml, pep_root)
+        try:
+            result = search_index.ensure_index(db_path, eu_xml, pep_root)
+        except Exception:
+            logger.exception("Zoekindex ongeldig; opnieuw opbouwen")
+            result = {"db": None, "ready": False, "stats": None}
         if result["ready"]:
             state["index_status"] = "ready"
             state["index_stats"] = result["stats"]
@@ -293,9 +297,13 @@ def create_app(
             state["meta"] = manifest
             if eu_xml.exists():
                 state["entities"] = ingest.parse_export(eu_xml.read_bytes())
-            if state["index_status"] != "disabled":
-                state["index_status"] = "building"
-                threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
+            stats = manifest.get("stats") or {}
+            unchanged = stats.get("downloaded") == 0
+            if state["index_status"] != "disabled" and not (unchanged and state["index_status"] == "ready"):
+                with state["build_lock"]:
+                    if state["index_status"] != "building":
+                        state["index_status"] = "building"
+                        threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
             return _status()
         except Exception:
             logger.exception("Verversen mislukt")
@@ -331,7 +339,9 @@ def create_app(
             finally:
                 db.close()
         elif state["index_status"] == "building":
-            warnings.append("Zoekindex wordt opgebouwd; probeer het zo nog eens")
+            warnings.append("Zoekindex wordt opgebouwd; EU-resultaten getoond")
+            for r in matcher.search_eu(state["entities"], query):
+                results.append(_serialize_eu_result_from_dict(r, query.name))
         else:
             for r in matcher.search_eu(state["entities"], query):
                 results.append(_serialize_eu_result_from_dict(r, query.name))

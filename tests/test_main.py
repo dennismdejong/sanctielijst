@@ -187,6 +187,44 @@ def test_status_index_ready(tmp_path, monkeypatch):
     assert data["index"]["eu_count"] == 1
 
 
+def test_search_while_building_serves_eu(tmp_path, monkeypatch):
+    import threading
+
+    import app.main as main
+
+    eu_root = tmp_path / "eu"
+    eu_root.mkdir()
+    (eu_root / "eu_sanctions.xml").write_bytes(b"<export/>")
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_rebuild(db_path, eu_xml, pep_root):
+        started.set()
+        release.wait(5)
+
+    monkeypatch.setattr(main.search_index, "rebuild_index", slow_rebuild)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=eu_root, search_db=tmp_path / "missing.sqlite"))
+    started.wait(5)
+    status = client.get("/api/status").json()
+    assert status["index"]["status"] == "building"
+    data = client.get("/api/search", params={"name": "Abdul Hai Hazem"}).json()
+    assert data["results"]
+    assert data["results"][0]["source"] == "eu"
+    assert data["results"][0]["entity"]["eu_reference_number"] == "EU.471.56"
+    assert any("opgebouwd" in w for w in data["warnings"])
+    release.set()
+
+
+def test_create_app_corrupt_db_does_not_raise(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    (tmp_path / "eu_sanctions.xml").write_bytes(b"<export/>")
+    (tmp_path / "search.sqlite").write_bytes(b"kapot")
+    app = create_app(entities=ENTITIES, eu_root=tmp_path, search_db=tmp_path / "search.sqlite")
+    client = TestClient(app)
+    data = client.get("/api/status").json()
+    assert data["index"]["status"] in ("building", "ready")
+
+
 def test_search_db_merges_eu_and_pep(tmp_path, monkeypatch):
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)

@@ -96,9 +96,20 @@ def test_pep_records_filters():
     assert jorge["datasets"] == ["ds1"]
 
 
+def test_pep_record_raw_is_none():
+    import tempfile
+    root = Path(tempfile.mkdtemp())
+    write_ftm(root, "ds1", [
+        {"id": "NK-1", "caption": "JORGE FERNÁNDEZ", "schema": "Person", "target": True, "datasets": ["ds1"],
+         "properties": {"name": ["JORGE FERNÁNDEZ"]}},
+    ])
+    r = _pep_records(root)[0]
+    assert r["raw"] is None
+
+
 import sqlite3
 
-from app.search_index import _open, _schema, build_index, search
+from app.search_index import _open, _schema, build_index, search, _name_score
 
 
 def build_fixture(root, db_path, include_eu=True, include_pep=True):
@@ -137,6 +148,14 @@ def test_search_exact_and_fuzzy(tmp_path):
     assert results[0]["matched_name"] == "JORGE FERNÁNDEZ"
     results = search(db, "JORGE FERNÁNDEZ")
     assert results and results[0]["entity"]["id"] == "NK-1"
+
+
+def test_name_score_fuzzy_token_set_branch():
+    score, matched = _name_score(["JORGE FERNÁNDEZ"], "JORGE FERNANDZ")
+    assert matched == "JORGE FERNÁNDEZ"
+    assert score != 100
+    assert 80 <= score < 100
+    assert score >= THRESHOLD
 
 
 def test_search_eu_source_and_raw(tmp_path):
@@ -218,6 +237,18 @@ def test_ensure_index_not_ready_when_missing(tmp_path):
     assert result["db"] is None
 
 
+def test_ensure_index_corrupt_db_not_ready(tmp_path):
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    db_path = tmp_path / "search.sqlite"
+    db_path.write_bytes(b"kapot")
+    assert index_fresh(db_path, eu_xml, tmp_path) is True
+    result = ensure_index(db_path, eu_xml, tmp_path)
+    assert result["ready"] is False
+    assert result["db"] is None
+    assert result["stats"] is None
+
+
 def test_load_stats(tmp_path):
     db_path = tmp_path / "search.sqlite"
     build_fixture(tmp_path, db_path)
@@ -234,3 +265,11 @@ def test_rebuild_index(tmp_path):
     stats = rebuild_index(db_path, eu_xml, tmp_path)
     assert stats["total"] == 2
     assert index_fresh(db_path, eu_xml, tmp_path)
+
+
+def test_search_typo_still_finds_candidate(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    db = _open(db_path)
+    results = search(db, "JORGE FERNANDZ", threshold=0)
+    assert results and results[0]["entity"]["id"] == "NK-1"

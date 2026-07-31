@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import re
@@ -147,34 +148,42 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -
     eu_entities = eu_entities or []
     records = _eu_records(eu_entities) + _pep_records(pep_root)
     new_path = db_path.with_suffix(db_path.suffix + ".new")
-    db = _open(new_path)
-    db.executescript(SCHEMA)
-    db.executemany(
-        "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, datasets, eu_ref, raw) "
-        "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :datasets, :eu_ref, :raw)",
-        [{
-            "source": r["source"],
-            "id": r["id"],
-            "caption": r["caption"],
-            "schema": r["schema"],
-            "names": json.dumps(r["names"], ensure_ascii=False),
-            "names_folded": " ".join(tokens(" ".join(r["names"]))),
-            "birth_dates": json.dumps(r["birth_dates"], ensure_ascii=False),
-            "birth_places": json.dumps(r["birth_places"], ensure_ascii=False),
-            "citizenships": json.dumps(r["citizenships"], ensure_ascii=False),
-            "political": json.dumps(r["political"], ensure_ascii=False),
-            "topics": json.dumps(r["topics"], ensure_ascii=False),
-            "datasets": json.dumps(r["datasets"], ensure_ascii=False),
-            "eu_ref": r["eu_ref"],
-            "raw": json.dumps(r["raw"], ensure_ascii=False) if r["raw"] is not None else None,
-        } for r in records],
-    )
-    for idx, r in enumerate(records):
-        names_folded = " ".join(tokens(" ".join(r["names"])))
-        db.execute("INSERT INTO names_fts (rowid, names_folded) VALUES (?, ?)", (idx + 1, names_folded))
-    db.commit()
-    db.close()
-    new_path.replace(db_path)
+    new_path.unlink(missing_ok=True)
+    db = None
+    try:
+        db = _open(new_path)
+        db.executescript(SCHEMA)
+        db.executemany(
+            "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, datasets, eu_ref, raw) "
+            "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :datasets, :eu_ref, :raw)",
+            [{
+                "source": r["source"],
+                "id": r["id"],
+                "caption": r["caption"],
+                "schema": r["schema"],
+                "names": json.dumps(r["names"], ensure_ascii=False),
+                "names_folded": " ".join(tokens(" ".join(r["names"]))),
+                "birth_dates": json.dumps(r["birth_dates"], ensure_ascii=False),
+                "birth_places": json.dumps(r["birth_places"], ensure_ascii=False),
+                "citizenships": json.dumps(r["citizenships"], ensure_ascii=False),
+                "political": json.dumps(r["political"], ensure_ascii=False),
+                "topics": json.dumps(r["topics"], ensure_ascii=False),
+                "datasets": json.dumps(r["datasets"], ensure_ascii=False),
+                "eu_ref": r["eu_ref"],
+                "raw": json.dumps(r["raw"], ensure_ascii=False) if r["raw"] is not None else None,
+            } for r in records],
+        )
+        for idx, r in enumerate(records):
+            names_folded = " ".join(tokens(" ".join(r["names"])))
+            db.execute("INSERT INTO names_fts (rowid, names_folded) VALUES (?, ?)", (idx + 1, names_folded))
+        db.commit()
+        db.close()
+        db = None
+        new_path.replace(db_path)
+    finally:
+        if db is not None:
+            db.close()
+        new_path.unlink(missing_ok=True)
     counts = {"eu_count": sum(1 for r in records if r["source"] == "eu"), "pep_count": sum(1 for r in records if r["source"] == "pep")}
     counts["total"] = counts["eu_count"] + counts["pep_count"]
     return counts
@@ -208,7 +217,7 @@ def search(db, name, birth_year=None, nationality=None, birth_place=None, entity
     query_tokens = tokens(name)
     if not query_tokens:
         return []
-    match_expr = " AND ".join(f'"{t}"' for t in query_tokens)
+    match_expr = " OR ".join(f'"{t}"' for t in query_tokens)
     rows = db.execute(
         "SELECT e.rowid, e.source, e.id, e.caption, e.schema, e.names, e.birth_dates, e.birth_places, e.citizenships, e.political, e.topics, e.datasets, e.eu_ref, e.raw "
         "FROM names_fts JOIN entities e ON e.rowid = names_fts.rowid WHERE names_fts MATCH ?",
@@ -234,6 +243,20 @@ def search(db, name, birth_year=None, nationality=None, birth_place=None, entity
         if entity_type == "person" and entity["schema"] != "Person":
             continue
         if entity_type == "enterprise" and entity["schema"] != "Company":
+            continue
+        if entity["source"] == "eu" and entity["raw"] is not None:
+            eu_result = matcher.score_entity(
+                entity["raw"],
+                matcher.SearchQuery(name, birth_year, nationality, birth_place, entity_type),
+            )
+            if eu_result is None:
+                continue
+            results.append({
+                "entity": entity,
+                "score": eu_result.total_score,
+                "matched_name": eu_result.matched_alias,
+                "details": [dataclasses.asdict(d) for d in eu_result.details],
+            })
             continue
         n_score, matched = _name_score(entity["names"], name)
         weights = [60]
@@ -267,6 +290,7 @@ def search(db, name, birth_year=None, nationality=None, birth_place=None, entity
 
 
 from . import ingest
+from . import matcher
 
 
 def _newest_input_mtime(eu_xml: Path, pep_root: Path) -> float:
@@ -293,10 +317,17 @@ def load_stats(db) -> dict:
 
 
 def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
-    if index_fresh(db_path, eu_xml, pep_root):
+    if not index_fresh(db_path, eu_xml, pep_root):
+        return {"db": None, "ready": False, "stats": None}
+    db = None
+    try:
         db = _open(db_path)
-        return {"db": db, "ready": True, "stats": load_stats(db)}
-    return {"db": None, "ready": False, "stats": None}
+        stats = load_stats(db)
+    except Exception:
+        if db is not None:
+            db.close()
+        return {"db": None, "ready": False, "stats": None}
+    return {"db": db, "ready": True, "stats": stats}
 
 
 def rebuild_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
