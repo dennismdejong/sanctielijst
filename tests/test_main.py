@@ -164,6 +164,8 @@ def pep_disabled(monkeypatch):
 
 
 def test_default_pep_root_uses_env(monkeypatch):
+    from pathlib import Path
+
     from app import main as main_module
     monkeypatch.setenv("PEP_DATA_DIR", "/data/pep")
     assert main_module.default_pep_root() == Path("/data/pep")
