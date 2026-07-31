@@ -142,7 +142,7 @@ def load_or_build_index(root_dir: Path, force: bool = False) -> dict | None:
 
 from rapidfuzz import fuzz
 
-THRESHOLD = 60
+THRESHOLD = 90
 MAX_RESULTS = 20
 
 

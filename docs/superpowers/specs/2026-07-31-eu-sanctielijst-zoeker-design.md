@@ -44,7 +44,7 @@ Twee databronnen:
 - Endpoint: `POST https://api.opensanctions.org/match/default`
 - Auth: header `Authorization: ApiKey <KEY>`, key uit env `OPENSANCTIONS_API_KEY`.
 - Request-body: `{"queries": {"q": {"schema": "Person", "properties": {"firstName": [...], "lastName": [...], "birthDate": [...], "nationality": [...], "birthPlace": [...]}}}}`
-- Params: `threshold=0.7`, `limit=10`, `topics=sanction&topics=sanction.linked&topics=debarment`
+- Params: `threshold=0.9`, `limit=10`, `topics=sanction&topics=sanction.linked&topics=debarment`
 - Response: `responses.q.results[]` met `id`, `caption`, `schema`, `properties` (alias, birthDate, birthPlace, citizenship, programId, sourceUrl, topics, …), `datasets`, `score` (0–1), `match`, `explanations` (per feature: `name_match`, `dob_year_disjoint`, …).
 - `default`-dataset bevat o.a. `eu_fsf` (dezelfde EU-lijst) plus OFAC, VN, VK, etc.
 - **Geen key?** De app draait EU-only en toont een melding. OpenSanctions schakelt in zodra de key aanwezig is.
@@ -92,7 +92,7 @@ sanctielijst/
 
 ## Match-scoring EU (lokaal)
 
-Totaalscore 0–100, **drempel ≥ 60** toont resultaat (geen resultaat → "Geen overeenkomsten gevonden").
+Totaalscore 0–100, **drempel ≥ 90** toont resultaat (geen resultaat → "Geen overeenkomsten gevonden").
 
 Gewichten (alleen kenmerken meetellen die de gebruiker invulde):
 

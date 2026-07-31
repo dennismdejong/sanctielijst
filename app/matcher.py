@@ -35,7 +35,7 @@ def name_score(query_name: str, aliases: list[dict]) -> tuple[int, str | None]:
     return best_score, best_alias
 
 
-THRESHOLD = 60
+THRESHOLD = 90
 MAX_RESULTS = 20
 
 

@@ -151,8 +151,8 @@ def test_search_fuzzy(pep_index_data):
 
 def test_search_birth_year_boosts(pep_index_data):
     index, _ = pep_index_data
-    exact = search_pep(index, "JORGE", birth_year=1965)
-    wrong = search_pep(index, "JORGE", birth_year=1999)
+    exact = search_pep(index, "JORGE", birth_year=1965, threshold=60)
+    wrong = search_pep(index, "JORGE", birth_year=1999, threshold=60)
     assert exact and wrong
     assert exact[0]["score"] >= wrong[0]["score"]
 
@@ -178,7 +178,7 @@ def test_search_threshold_and_max(pep_index_data):
     assert len(low) >= 2
     capped = search_pep(index, "JORGE", threshold=0, max_results=1)
     assert len(capped) == 1
-    assert THRESHOLD == 60
+    assert THRESHOLD == 90
     assert MAX_RESULTS == 20
 
 

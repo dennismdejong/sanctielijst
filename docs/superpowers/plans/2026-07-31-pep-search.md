@@ -12,7 +12,7 @@
 
 - Python 3.11+; geen nieuwe dependencies.
 - Titel app: **"Compliance Zoeker"** (overal: `static/index.html` `<title>`+`<h1>`, FastAPI-title, README). Subtekst vermeldt EU-sancties én PEP.
-- Scoring: naam 60 / geboortejaar 20 / nationaliteit 10 / geboorteplaats 10; drempel 60; max 20 resultaten; alleen ingevulde kenmerken meetellen.
+- Scoring: naam 60 / geboortejaar 20 / nationaliteit 10 / geboorteplaats 10; drempel 90; max 20 resultaten; alleen ingevulde kenmerken meetellen.
 - PEP-index: alleen `target: true` + schema `Person`/`Company`; `entity_type` filter `person`→`Person`, `enterprise`→`Company`.
 - Cache: `data/pep/index.pkl`; geldig als nieuwer dan alle `entities.ftm.json`-bestanden én `datasets.json`; corrupt → herbouwen.
 - `PEP_INDEX_ENABLED` env: `"0"`/`"false"`/`"no"` schakelt PEP uit; default aan als `data/pep/` bestaat.

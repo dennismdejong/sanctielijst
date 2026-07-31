@@ -2,7 +2,7 @@ import requests
 
 API_URL = "https://api.opensanctions.org/match/default"
 TIMEOUT = 30
-THRESHOLD = 0.7
+THRESHOLD = 0.9
 LIMIT = 10
 TOPICS = ["sanction", "sanction.linked", "debarment"]
 

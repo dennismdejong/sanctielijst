@@ -49,7 +49,7 @@ def test_match_opensanctions_sends_expected_payload(monkeypatch):
     results = match_opensanctions("KEY123", "Aleksandr Zakharov", birth_year=1965, nationality="RU")
     assert captured["url"] == "https://api.opensanctions.org/match/default"
     assert captured["headers"]["Authorization"] == "ApiKey KEY123"
-    assert captured["params"]["threshold"] == 0.7
+    assert captured["params"]["threshold"] == 0.9
     assert captured["params"]["limit"] == 10
     assert captured["timeout"] == 30
     query = captured["json"]["queries"]["q"]

@@ -10,7 +10,7 @@ De sanctielijst-app zoekt naast de EU-sanctielijst óók in de lokaal gedownload
 ## Uitgangspunten
 
 - Bestaande app (FastAPI, `app/ingest.py`, `app/matcher.py`, `app/main.py`, vanilla frontend) blijft zoals die is; PEP-zoeken is een parallelle bron naast EU.
-- Scoring-filosofie blijft gelijk: naam 60 / geboortejaar 20 / nationaliteit 10 / geboorteplaats 10, drempel 60, alleen kenmerken meetellen die de gebruiker invulde.
+- Scoring-filosofie blijft gelijk: naam 60 / geboortejaar 20 / nationaliteit 10 / geboorteplaats 10, drempel 90, alleen kenmerken meetellen die de gebruiker invulde.
 - PEP-data is al gedownload (Task 1–5 van het downloader-plan); deze feature leest `data/pep/` en voegt metadata toe.
 - Geen nieuwe dependencies (stdlib `sqlite3`/`pickle`/`json` + bestaande `rapidfuzz`, `requests`).
 
@@ -39,9 +39,9 @@ Alleen `target: true` + schema `Person`/`Company` wordt geïndexeerd (~730K enti
 - `build_index(root_dir: Path) -> dict` — parset alle `*/entities.ftm.json`, bouwt `{"entities": [...], "token_map": {token: [idx,...]}, "datasets": {...}, "built_at": iso}`; `token_map` is een lowercase token → lijst van entiteitsindices (inverted index, uit `names`).
 - `save_index(root_dir, index)`, `load_index_cache(root_dir) -> dict | None` — pickle-cache; geldig als `index.pkl` nieuwer is dan alle `entities.ftm.json`-bestanden (mtime) én `datasets.json` bestaat.
 - `load_or_build_index(root_dir: Path, force: bool = False) -> dict` — cache eerst, anders bouwen (met `source: "cached"|"built"` in de index).
-- `search_pep(index: dict, name: str, birth_year: int | None = None, nationality: str | None = None, birth_place: str | None = None, entity_type: str | None = None, threshold: int = 60, max_results: int = 20) -> list[dict]`
+- `search_pep(index: dict, name: str, birth_year: int | None = None, nationality: str | None = None, birth_place: str | None = None, entity_type: str | None = None, threshold: int = 90, max_results: int = 20) -> list[dict]`
   - Kandidaten via `token_map` (unie van query-tokens) → fuzzy-score met rapidfuzz `token_set_ratio` over `names` (zelfde `name_score`-logica als EU, inclusief best-of)
-  - Gewogen totaalscore 0–100 (naam/geboortejaar/nationaliteit/geboorteplaats), drempel 60, `entity_type`-filter (`person`→`Person`, `enterprise`→`Company`)
+  - Gewogen totaalscore 0–100 (naam/geboortejaar/nationaliteit/geboorteplaats), drempel 90, `entity_type`-filter (`person`→`Person`, `enterprise`→`Company`)
   - Retourneert gesorteerde records met per record de score + gematchte naam + details
 
 ### 2. Dataset-metadata (uitbreiding downloader)
