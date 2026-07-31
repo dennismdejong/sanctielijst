@@ -1,4 +1,6 @@
+import hashlib
 import os
+import time
 from pathlib import Path
 
 import requests
@@ -46,3 +48,36 @@ def list_pep_datasets(index: dict) -> list[dict]:
         })
     result.sort(key=lambda d: d["name"])
     return result
+
+
+def _sha1(path: Path) -> str:
+    digest = hashlib.sha1()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download_artifact(url: str, dest: Path, checksum: str, timeout: int = TIMEOUT, retries: int = 1) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_suffix(dest.suffix + ".part")
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            part.unlink(missing_ok=True)
+            with requests.get(url, timeout=timeout, stream=True) as resp:
+                resp.raise_for_status()
+                with open(part, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if chunk:
+                            fh.write(chunk)
+            if _sha1(part) != checksum:
+                raise ValueError(f"checksum mismatch voor {dest.name}")
+            part.replace(dest)
+            return
+        except Exception as exc:
+            last_error = exc
+            part.unlink(missing_ok=True)
+            if attempt < retries:
+                time.sleep(DOWNLOAD_PAUSE)
+    raise last_error

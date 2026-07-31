@@ -94,3 +94,96 @@ def test_list_pep_datasets_dict_index():
 
 def test_list_pep_datasets_missing_key():
     assert list_pep_datasets({}) == []
+
+
+import hashlib
+
+import requests
+
+from app.pep_ingest import download_artifact
+
+
+@pytest.fixture(autouse=True)
+def no_pause(monkeypatch):
+    monkeypatch.setattr("app.pep_ingest.DOWNLOAD_PAUSE", 0)
+
+
+def sha1_bytes(data: bytes) -> str:
+    return hashlib.sha1(data).hexdigest()
+
+
+class FakeStreamResp:
+    def __init__(self, chunks, ok=True):
+        self._chunks = chunks
+        self._ok = ok
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        if not self._ok:
+            raise requests.HTTPError("500")
+
+    def iter_content(self, chunk_size):
+        yield from self._chunks
+
+
+def test_download_artifact_writes_and_verifies(tmp_path, monkeypatch):
+    data = b'{"entities": []}'
+    dest = tmp_path / "al_kuvendi" / "entities.ftm.json"
+    captured = {}
+
+    def fake_get(url, timeout, stream=False):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        captured["stream"] = stream
+        return FakeStreamResp([data])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    download_artifact("https://x/entities.ftm.json", dest, sha1_bytes(data))
+    assert dest.read_bytes() == data
+    assert not dest.with_suffix(dest.suffix + ".part").exists()
+    assert captured["stream"] is True
+
+
+def test_download_artifact_checksum_mismatch_raises(tmp_path, monkeypatch):
+    dest = tmp_path / "x" / "entities.ftm.json"
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeStreamResp([b"data"]))
+    with pytest.raises(ValueError, match="checksum"):
+        download_artifact("https://x", dest, "ffff")
+    assert not dest.exists()
+    assert not dest.with_suffix(dest.suffix + ".part").exists()
+
+
+def test_download_artifact_retries_then_raises(tmp_path, monkeypatch):
+    dest = tmp_path / "x" / "entities.ftm.json"
+    calls = {"n": 0}
+
+    def fake_get(url, timeout, stream=False):
+        calls["n"] += 1
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    with pytest.raises(requests.ConnectionError):
+        download_artifact("https://x", dest, "abc", retries=1)
+    assert calls["n"] == 2
+
+
+def test_download_artifact_retry_succeeds(tmp_path, monkeypatch):
+    data = b"data"
+    dest = tmp_path / "x" / "entities.ftm.json"
+    calls = {"n": 0}
+
+    def fake_get(url, timeout, stream=False):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise requests.ConnectionError("down")
+        return FakeStreamResp([data])
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    download_artifact("https://x", dest, sha1_bytes(data), retries=1)
+    assert calls["n"] == 2
+    assert dest.read_bytes() == data
