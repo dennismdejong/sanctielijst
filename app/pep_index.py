@@ -131,3 +131,93 @@ def load_or_build_index(root_dir: Path, force: bool = False) -> dict | None:
     index["datasets_meta"] = _load_datasets_meta(root_dir)
     save_index(root_dir, index)
     return index
+
+
+from rapidfuzz import fuzz
+
+THRESHOLD = 60
+MAX_RESULTS = 20
+
+
+def _birth_year(value: str) -> int | None:
+    match = re.match(r"(\d{4})", value)
+    return int(match.group(1)) if match else None
+
+
+def _name_score(names: list[str], query: str) -> tuple[int, str | None]:
+    best = 0
+    best_name = None
+    q = query.strip()
+    for name in names:
+        if not name:
+            continue
+        score = fuzz.token_set_ratio(q, name)
+        if score > best:
+            best = score
+            best_name = name
+    return best, best_name
+
+
+def search_pep(
+    index: dict,
+    name: str,
+    birth_year: int | None = None,
+    nationality: str | None = None,
+    birth_place: str | None = None,
+    entity_type: str | None = None,
+    threshold: int = THRESHOLD,
+    max_results: int = MAX_RESULTS,
+) -> list[dict]:
+    token_map = index.get("token_map", {})
+    entities = index.get("entities", [])
+    candidates = set()
+    for token in _tokens(name):
+        candidates.update(token_map.get(token, []))
+    results = []
+    for idx in candidates:
+        entity = entities[idx]
+        if entity_type == "person" and entity["schema"] != "Person":
+            continue
+        if entity_type == "enterprise" and entity["schema"] != "Company":
+            continue
+        n_score, matched = _name_score(entity["names"], name)
+        weights = [60]
+        details = [{
+            "feature": "naam",
+            "score": n_score,
+            "label": f'Naam {n_score}% (via "{matched}")' if matched else "Naam 0%",
+        }]
+        if birth_year is not None:
+            best = 0
+            for date in entity["birth_dates"]:
+                year = _birth_year(date)
+                if year is None:
+                    continue
+                diff = abs(birth_year - year)
+                score = 100 if diff == 0 else 75 if diff == 1 else 50 if diff == 2 else 0
+                best = max(best, score)
+            weights.append(20)
+            details.append({
+                "feature": "geboortejaar",
+                "score": best,
+                "label": "Geboortejaar exact" if best == 100 else f"Geboortejaar ({best}%)",
+            })
+        if nationality:
+            q = nationality.strip().upper()
+            best = max((100 for c in entity["citizenships"] if c.strip().upper() == q), default=0)
+            weights.append(10)
+            details.append({
+                "feature": "nationaliteit",
+                "score": best,
+                "label": "Nationaliteit match" if best >= 85 else f"Nationaliteit ({best}%)",
+            })
+        if birth_place:
+            best = max((fuzz.token_set_ratio(birth_place.strip(), p) for p in entity["birth_places"]), default=0)
+            weights.append(10)
+            details.append({"feature": "geboorteplaats", "score": best, "label": f"Geboorteplaats {best}%"})
+        total = round(sum(w * d["score"] for w, d in zip(weights, details)) / sum(weights))
+        if total < threshold:
+            continue
+        results.append({"entity": entity, "score": total, "matched_name": matched, "details": details})
+    results.sort(key=lambda r: r["score"], reverse=True)
+    return results[:max_results]

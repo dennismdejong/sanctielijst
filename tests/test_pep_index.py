@@ -104,3 +104,73 @@ def test_datasets_meta_attached(tmp_path):
     index = load_or_build_index(tmp_path)
     assert index["datasets_meta"]["ar_parliament"]["title"] == "Argentina Parliament"
     assert index["datasets"]["ar_parliament"] == 1
+
+
+from app.pep_index import MAX_RESULTS, THRESHOLD, search_pep
+
+
+@pytest.fixture
+def pep_index_data(tmp_path):
+    write_ftm(tmp_path, "ds1", FIXTURE)
+    return build_index(tmp_path), tmp_path
+
+
+def test_search_exact_top(pep_index_data):
+    index, _ = pep_index_data
+    results = search_pep(index, "JORGE FERNANDEZ")
+    assert results[0]["entity"]["id"] == "NK-1"
+    assert results[0]["score"] == 100
+    assert results[0]["matched_name"] == "JORGE FERNANDEZ"
+    assert results[0]["details"][0]["feature"] == "naam"
+
+
+def test_search_fuzzy(pep_index_data):
+    index, _ = pep_index_data
+    results = search_pep(index, "JORGE FERNÁNDEZ")
+    assert results and results[0]["score"] >= 80
+
+
+def test_search_birth_year_boosts(pep_index_data):
+    index, _ = pep_index_data
+    exact = search_pep(index, "JORGE", birth_year=1965)
+    wrong = search_pep(index, "JORGE", birth_year=1999)
+    assert exact and wrong
+    assert exact[0]["score"] >= wrong[0]["score"]
+
+
+def test_search_nationality_match(pep_index_data):
+    index, _ = pep_index_data
+    results = search_pep(index, "JORGE", nationality="ar")
+    assert any(d["feature"] == "nationaliteit" and d["score"] == 100 for r in results for d in r["details"])
+
+
+def test_search_entity_type_filter(pep_index_data):
+    index, _ = pep_index_data
+    people = search_pep(index, "JORGE", entity_type="person")
+    enterprises = search_pep(index, "JORGE", entity_type="enterprise")
+    assert people and not enterprises
+    comps = search_pep(index, "Yacimientos", entity_type="enterprise")
+    assert comps and comps[0]["entity"]["schema"] == "Company"
+
+
+def test_search_threshold_and_max(pep_index_data):
+    index, _ = pep_index_data
+    low = search_pep(index, "JORGE", threshold=0)
+    assert len(low) >= 2
+    capped = search_pep(index, "JORGE", threshold=0, max_results=1)
+    assert len(capped) == 1
+    assert THRESHOLD == 60
+    assert MAX_RESULTS == 20
+
+
+def test_search_no_candidates(pep_index_data):
+    index, _ = pep_index_data
+    assert search_pep(index, "Zzqqq Xxww") == []
+    assert search_pep(index, "!!") == []
+
+
+def test_search_sorts_desc(pep_index_data):
+    index, _ = pep_index_data
+    results = search_pep(index, "JORGE", threshold=0)
+    scores = [r["score"] for r in results]
+    assert scores == sorted(scores, reverse=True)
