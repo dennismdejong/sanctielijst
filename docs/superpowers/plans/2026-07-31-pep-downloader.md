@@ -494,11 +494,17 @@ def test_refresh_pep_source_error_recorded(tmp_path, monkeypatch):
 
 
 def test_refresh_pep_limit(tmp_path, monkeypatch):
+    data_a = b"a"
+    data_b = b"b"
     index = make_index([
-        make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://a", checksum=sha1_bytes(b"a"))]),
-        make_source("br_pep", version="v1", resources=[make_resource(url="https://b", checksum=sha1_bytes(b"b"))]),
+        make_source("al_kuvendi", version="v1", resources=[make_resource(url="https://a", checksum=sha1_bytes(data_a))]),
+        make_source("br_pep", version="v1", resources=[make_resource(url="https://b", checksum=sha1_bytes(data_b))]),
     ])
-    monkeypatch.setattr(requests, "get", lambda url, timeout, stream=False: FakeStreamResp([url.encode()]))
+
+    def fake_get(url, timeout, stream=False):
+        return FakeStreamResp([data_a if url == "https://a" else data_b])
+
+    monkeypatch.setattr(requests, "get", fake_get)
     manifest = refresh_pep(tmp_path, index=index, limit=1)
     assert manifest["stats"]["total"] == 1
     assert manifest["stats"]["downloaded"] == 1
