@@ -173,3 +173,24 @@ def test_write_datasets_meta_atomic_no_tmp_left(tmp_path):
     write_datasets_meta({"datasets": []}, tmp_path)
     assert (tmp_path / "datasets.json").exists()
     assert not (tmp_path / "datasets.json.tmp").exists()
+
+
+def test_write_datasets_meta_skips_when_unchanged(tmp_path):
+    index = {"datasets": [{"name": "ar_parliament", "collections": ["peps"], "title": "Argentina Parliament", "publisher": {"name": "HCDN", "country": "ar", "official": True}, "url": "x"}]}
+    write_datasets_meta(index, tmp_path)
+    before = (tmp_path / "datasets.json").stat().st_mtime_ns
+    import time
+    time.sleep(0.01)
+    write_datasets_meta(index, tmp_path)
+    after = (tmp_path / "datasets.json").stat().st_mtime_ns
+    assert before == after
+    assert not (tmp_path / "datasets.json.tmp").exists()
+
+
+def test_write_datasets_meta_updates_when_changed(tmp_path):
+    index = {"datasets": [{"name": "ar_parliament", "collections": ["peps"], "title": "Old", "publisher": {"country": "ar"}}]}
+    write_datasets_meta(index, tmp_path)
+    index["datasets"][0]["title"] = "New"
+    write_datasets_meta(index, tmp_path)
+    meta = json.loads((tmp_path / "datasets.json").read_text())
+    assert meta["ar_parliament"]["title"] == "New"

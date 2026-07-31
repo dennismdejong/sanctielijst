@@ -206,6 +206,12 @@ def write_datasets_meta(index: dict, root_dir: Path) -> None:
         }
     root_dir.mkdir(parents=True, exist_ok=True)
     path = root_dir / "datasets.json"
+    if path.exists():
+        try:
+            if json.loads(path.read_text()) == meta:
+                return
+        except Exception:
+            pass
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
     os.replace(tmp, path)
