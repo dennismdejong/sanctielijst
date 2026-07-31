@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import eu_ingest, ingest, matcher, opensanctions
+from . import pep_ingest
 from . import search_index
+from .export import render_search_pdf
 
 load_dotenv()
 
@@ -309,23 +311,7 @@ def create_app(
             logger.exception("Verversen mislukt")
             raise HTTPException(status_code=503, detail="Verversen mislukt")
 
-    @app.get("/api/search")
-    def search(
-        name: str = Query(..., min_length=1),
-        birth_year: int | None = Query(None, ge=1900, le=2100),
-        nationality: str | None = None,
-        birth_place: str | None = None,
-        entity_type: str | None = Query(None, pattern="^(person|enterprise)$"),
-    ):
-        query = matcher.SearchQuery(
-            name=name.strip(),
-            birth_year=birth_year,
-            nationality=(nationality or "").strip() or None,
-            birth_place=(birth_place or "").strip() or None,
-            entity_type=entity_type,
-        )
-        if not query.name:
-            raise HTTPException(status_code=422, detail="Naam is verplicht")
+    def run_search(query: matcher.SearchQuery) -> tuple[list[dict], list[str]]:
         results = []
         warnings = []
         if state["index_status"] == "ready":
@@ -356,6 +342,26 @@ def create_app(
                 warnings.append("OpenSanctions tijdelijk niet beschikbaar")
         results.sort(key=lambda r: r["score"], reverse=True)
         results = results[:matcher.MAX_RESULTS]
+        return results, warnings
+
+    @app.get("/api/search")
+    def search(
+        name: str = Query(..., min_length=1),
+        birth_year: int | None = Query(None, ge=1900, le=2100),
+        nationality: str | None = None,
+        birth_place: str | None = None,
+        entity_type: str | None = Query(None, pattern="^(person|enterprise)$"),
+    ):
+        query = matcher.SearchQuery(
+            name=name.strip(),
+            birth_year=birth_year,
+            nationality=(nationality or "").strip() or None,
+            birth_place=(birth_place or "").strip() or None,
+            entity_type=entity_type,
+        )
+        if not query.name:
+            raise HTTPException(status_code=422, detail="Naam is verplicht")
+        results, warnings = run_search(query)
         return {
             "query": {
                 "name": query.name,
@@ -368,6 +374,32 @@ def create_app(
             "warnings": warnings,
             "opensanctions_active": opensanctions_active,
         }
+
+    @app.get("/api/search/export")
+    def search_export(
+        name: str = Query(..., min_length=1),
+        birth_year: int | None = Query(None, ge=1900, le=2100),
+        nationality: str | None = None,
+        birth_place: str | None = None,
+        entity_type: str | None = Query(None, pattern="^(person|enterprise)$"),
+        author: str | None = None,
+    ):
+        query = matcher.SearchQuery(name=name.strip(), birth_year=birth_year, nationality=(nationality or "").strip() or None, birth_place=(birth_place or "").strip() or None, entity_type=entity_type)
+        if not query.name:
+            raise HTTPException(status_code=422, detail="Naam is verplicht")
+        results, warnings = run_search(query)
+        generated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        payload = {
+            "query": {"name": query.name, "birth_year": query.birth_year, "nationality": query.nationality, "birth_place": query.birth_place, "entity_type": query.entity_type},
+            "results": results, "warnings": warnings,
+            "meta": state["meta"], "pep_meta": pep_ingest.load_pep_manifest(pep_root),
+            "version": os.environ.get("APP_VERSION", "dev"),
+            "author": author, "generated_at": generated,
+            "threshold": matcher.THRESHOLD, "max_results": matcher.MAX_RESULTS,
+        }
+        pdf = render_search_pdf(payload)
+        filename = f"screening-{datetime.now().astimezone().strftime('%Y-%m-%d')}.pdf"
+        return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

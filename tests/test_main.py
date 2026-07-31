@@ -177,6 +177,31 @@ def _write_search_db(root):
     return search_index.build_index(root / "search.sqlite", [make_eu_entity()], root)
 
 
+def build_index(db_path, eu_entities, root):
+    return search_index.build_index(db_path, eu_entities, root)
+
+
+def _decoded_text(data: bytes) -> bytes:
+    import re
+    import zlib
+
+    from reportlab.pdfbase.pdfutils import asciiBase85Decode
+
+    text = b""
+    for match in re.finditer(rb"stream\r?\n(.*?)endstream", data, re.S):
+        stream = match.group(1)
+        try:
+            stream = asciiBase85Decode(stream)
+        except Exception:
+            pass
+        try:
+            stream = zlib.decompress(stream)
+        except Exception:
+            pass
+        text += stream
+    return text
+
+
 def test_status_index_ready(tmp_path, monkeypatch):
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
@@ -334,3 +359,30 @@ def test_status_data_age_hours_tz_naive_ok(tmp_path):
     assert isinstance(data["data_age_hours"], float)
     assert main_module._data_age_hours("garbage") is None
     assert main_module._data_age_hours(None) is None
+
+
+def test_export_returns_pdf(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.get("/api/search/export", params={"name": "JORGE FERNANDEZ", "author": "Dennis"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.content[:4] == b"%PDF"
+
+
+def test_export_requires_name():
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/search/export").status_code == 422
+
+
+def test_export_empty_results(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    build_index(tmp_path / "search.sqlite", [make_eu_entity()], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.get("/api/search/export", params={"name": "Zzqqq Xxww"})
+    assert resp.status_code == 200
+    assert b"Geen overeenkomsten" in _decoded_text(resp.content)
