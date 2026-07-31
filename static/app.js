@@ -156,8 +156,12 @@ async function loadStatus() {
       s.source === "fresh" ? "data vers" : "data gecachet",
       s.opensanctions_active ? "OpenSanctions actief" : "OpenSanctions niet actief",
     ];
-    if (s.pep_index && s.pep_index.enabled) {
-      parts.push(`${s.pep_index.entity_count.toLocaleString("nl-NL")} PEP-records`);
+    if (s.pep_index) {
+      if (s.pep_index.status === "loading") {
+        parts.push("PEP-index wordt geladen…");
+      } else if (s.pep_index.enabled) {
+        parts.push(`${s.pep_index.entity_count.toLocaleString("nl-NL")} PEP-records`);
+      }
     }
     statusLine.textContent = parts.join(" · ");
   } catch {

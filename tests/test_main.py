@@ -198,7 +198,7 @@ def test_status_pep_disabled():
 def test_status_pep_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv(pep_index.INDEX_ENV, "1")
     _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path, pep_sync=True))
     data = client.get("/api/status").json()
     assert data["pep_index"]["enabled"] is True
     assert data["pep_index"]["entity_count"] == 1
@@ -208,7 +208,7 @@ def test_status_pep_enabled(tmp_path, monkeypatch):
 def test_search_pep_hit_with_sources(tmp_path, monkeypatch):
     monkeypatch.setenv(pep_index.INDEX_ENV, "1")
     _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path, pep_sync=True))
     data = client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()
     pep_results = [r for r in data["results"] if r["source"] == "pep"]
     assert pep_results
@@ -224,6 +224,25 @@ def test_search_pep_hit_with_sources(tmp_path, monkeypatch):
 def test_search_pep_entity_type_filter(tmp_path, monkeypatch):
     monkeypatch.setenv(pep_index.INDEX_ENV, "1")
     _write_pep_fixture(tmp_path)
-    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path, pep_sync=True))
     data = client.get("/api/search", params={"name": "JORGE FERNANDEZ", "entity_type": "enterprise"}).json()
     assert not [r for r in data["results"] if r["source"] == "pep"]
+
+
+def test_pep_background_load(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setenv(pep_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, pep_root=tmp_path))
+    assert client.get("/api/status").json()["pep_index"]["status"] == "loading"
+    ready = False
+    for _ in range(40):
+        data = client.get("/api/status").json()
+        if data["pep_index"]["status"] == "ready":
+            ready = True
+            break
+        time.sleep(0.05)
+    assert ready
+    assert data["pep_index"]["entity_count"] == 1
+    assert client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()["results"][0]["source"] == "pep"

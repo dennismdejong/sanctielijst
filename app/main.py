@@ -1,6 +1,7 @@
 import dataclasses
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -118,12 +119,23 @@ def _serialize_pep_result(result: dict, index: dict) -> dict:
     }
 
 
+def _load_pep_index(state: dict, pep_root: Path) -> None:
+    try:
+        state["pep"] = pep_index.load_or_build_index(pep_root)
+    except Exception:
+        logger.exception("PEP-index laden mislukt")
+        state["pep"] = None
+    finally:
+        state["pep_loading"] = False
+
+
 def create_app(
     entities: list[dict] | None = None,
     os_api_key: str | None = None,
     cache_dir: Path = CACHE_DIR,
     static_dir: Path = STATIC_DIR,
     pep_root: Path = PEP_ROOT,
+    pep_sync: bool | None = None,
 ) -> FastAPI:
     if entities is None:
         entities, meta = ingest.load_index(cache_dir)
@@ -131,8 +143,15 @@ def create_app(
         meta = {}
     if os_api_key is None:
         os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
-    pep = pep_index.load_or_build_index(pep_root) if _pep_enabled(pep_root) else None
-    state = {"entities": entities, "meta": meta, "pep": pep}
+    if pep_sync is None:
+        pep_sync = os.environ.get("PEP_INDEX_SYNC", "").strip().lower() in ("1", "true", "yes")
+    state = {"entities": entities, "meta": meta, "pep": None, "pep_loading": False}
+    if _pep_enabled(pep_root):
+        if pep_sync:
+            state["pep"] = pep_index.load_or_build_index(pep_root)
+        else:
+            state["pep_loading"] = True
+            threading.Thread(target=_load_pep_index, args=(state, pep_root), daemon=True).start()
     opensanctions_active = bool(os_api_key)
 
     app = FastAPI(title="Compliance Zoeker")
@@ -149,6 +168,7 @@ def create_app(
         cached_at = state["meta"].get("cached_at")
         age_hours = round((time.time() - cached_at) / 3600, 1) if cached_at else None
         pep = state["pep"]
+        pep_status = "loading" if state["pep_loading"] else ("ready" if pep is not None else "disabled")
         return {
             "cached_at": cached_at,
             "generated_at": state["meta"].get("generated_at"),
@@ -157,10 +177,11 @@ def create_app(
             "opensanctions_active": opensanctions_active,
             "source": state["meta"].get("source", "unknown"),
             "pep_index": {
-                "enabled": pep is not None,
+                "enabled": pep is not None or state["pep_loading"],
                 "entity_count": len(pep.get("entities", [])) if pep else 0,
                 "datasets_count": len(pep.get("datasets", {})) if pep else 0,
                 "source": pep.get("source") if pep else None,
+                "status": pep_status,
             },
         }
 
