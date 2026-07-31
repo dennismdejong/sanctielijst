@@ -190,6 +190,7 @@ def create_app(
         pep = state["pep"]
         pep_status = "loading" if state["pep_loading"] else ("ready" if pep is not None else "disabled")
         return {
+            "version": os.environ.get("APP_VERSION", "dev"),
             "cached_at": meta.get("downloaded_at"),
             "generated_at": meta.get("generation_date"),
             "entity_count": len(state["entities"]),
