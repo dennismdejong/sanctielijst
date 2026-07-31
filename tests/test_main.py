@@ -1,6 +1,12 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _isolate_os_env(monkeypatch):
+    monkeypatch.delenv("OPENSANCTIONS_API_KEY", raising=False)
 
 
 def make_entity(eu_ref, whole_name, subject_type="person", year=None, country=None, place=None):
