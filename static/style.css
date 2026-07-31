@@ -140,6 +140,13 @@ button:hover { opacity: 0.9; }
 
 .loading { text-align: center; color: var(--muted); }
 
+.footer {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 1.5rem 1rem 2rem;
+}
+
 @media (max-width: 600px) {
   .row { flex-direction: column; gap: 0; }
 }

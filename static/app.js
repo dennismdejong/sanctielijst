@@ -154,8 +154,10 @@ async function loadStatus() {
     const parts = [
       `${s.entity_count.toLocaleString("nl-NL")} records`,
       s.source === "fresh" ? "data vers" : "data gecachet",
-      s.opensanctions_active ? "OpenSanctions actief" : "OpenSanctions niet actief",
     ];
+    if (s.opensanctions_active) {
+      parts.push("OpenSanctions actief");
+    }
     if (s.pep_index) {
       if (s.pep_index.status === "loading") {
         parts.push("PEP-index wordt geladen…");
@@ -164,6 +166,10 @@ async function loadStatus() {
       }
     }
     statusLine.textContent = parts.join(" · ");
+    const footer = document.getElementById("footer");
+    if (footer && s.version) {
+      footer.textContent = `Versie ${s.version}`;
+    }
   } catch {
     statusLine.textContent = "Status niet beschikbaar";
   }
