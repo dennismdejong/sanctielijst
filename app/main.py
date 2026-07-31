@@ -388,7 +388,8 @@ def create_app(
         if not query.name:
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
-        generated = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z")
+        now = datetime.now().astimezone()
+        generated = now.strftime("%Y-%m-%d %H:%M %Z")
         payload = {
             "query": {"name": query.name, "birth_year": query.birth_year, "nationality": query.nationality, "birth_place": query.birth_place, "entity_type": query.entity_type},
             "results": results, "warnings": warnings,
@@ -397,8 +398,12 @@ def create_app(
             "author": author, "generated_at": generated,
             "threshold": matcher.THRESHOLD, "max_results": matcher.MAX_RESULTS,
         }
-        pdf = render_search_pdf(payload)
-        filename = f"screening-{datetime.now().astimezone().strftime('%Y-%m-%d')}.pdf"
+        try:
+            pdf = render_search_pdf(payload)
+        except Exception:
+            logger.exception("PDF-generatie mislukt")
+            raise HTTPException(status_code=500, detail="PDF-generatie mislukt")
+        filename = f"screening-{now.strftime('%Y-%m-%d')}.pdf"
         return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     if static_dir.exists():

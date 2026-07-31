@@ -3,7 +3,7 @@ from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 _TITLE = "Compliance Zoeker — Screeningsrapport"
 _DISCLAIMER = (
@@ -37,20 +37,67 @@ def _result_paragraphs(result: dict, styles) -> list:
         parts.append(Paragraph(f"&bull; {_escape(d.get('label', ''))}", styles["body"]))
     entity = result.get("entity", {})
     if result.get("eu") is not None:
+        raw = entity.get("raw") or entity
         parts.append(Paragraph(f"EU-referentie: {_escape(entity.get('eu_reference_number', ''))}", styles["body"]))
+        un_id = raw.get("united_nations_id")
+        if un_id:
+            parts.append(Paragraph(f"VN-id: {_escape(un_id)}", styles["body"]))
+        aliases = [a["whole_name"] for a in raw.get("aliases", []) if a.get("whole_name")]
+        if aliases:
+            parts.append(Paragraph(f"Aliassen: {_escape(', '.join(aliases[:5]))}", styles["body"]))
+        for birth in raw.get("birthdates", []):
+            when = birth.get("date") or birth.get("year")
+            where = birth.get("place") or birth.get("city")
+            value = " ".join(filter(None, [when, where]))
+            if value:
+                parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(value)}", styles["body"]))
+        for country in raw.get("citizenships", []):
+            nationality = country.get("description") or country.get("iso2")
+            if nationality:
+                parts.append(Paragraph(f"Nationaliteit: {_escape(nationality)}", styles["body"]))
+        function = next((a.get("function") for a in raw.get("aliases", []) if a.get("function")), "")
+        if function:
+            parts.append(Paragraph(f"Functie: {_escape(function)}", styles["body"]))
+        for reg in raw.get("regulations", []):
+            title = reg.get("number_title") or reg.get("programme")
+            url = reg.get("publication_url")
+            value = " — ".join(filter(None, [title, url]))
+            if value:
+                parts.append(Paragraph(f"Reglementen: {_escape(value)}", styles["body"]))
+        for remark in raw.get("remarks", []):
+            if remark:
+                parts.append(Paragraph(f"Opmerkingen: {_escape(remark)}", styles["body"]))
     if result.get("pep") is not None:
+        if entity.get("schema"):
+            parts.append(Paragraph(f"Schema: {_escape(entity['schema'])}", styles["body"]))
+        for when in entity.get("birth_dates") or []:
+            parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(when)}", styles["body"]))
+        for where in entity.get("birth_places") or []:
+            parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(where)}", styles["body"]))
+        for country in entity.get("citizenships") or []:
+            parts.append(Paragraph(f"Nationaliteit: {_escape(country)}", styles["body"]))
+        for party in entity.get("political") or []:
+            parts.append(Paragraph(f"Partij/functie: {_escape(party)}", styles["body"]))
+        for tag in entity.get("topics") or []:
+            parts.append(Paragraph(f"Risico-tags: {_escape(tag)}", styles["body"]))
         for ds in result["pep"].get("datasets", []):
             parts.append(Paragraph(f"Bron: {_escape(ds.get('title', ''))} ({_escape((ds.get('country') or '').upper())}) — {_escape(ds.get('url', ''))}", styles["body"]))
         parts.append(Paragraph(f"Details: {_escape(result['pep'].get('url', ''))}", styles["body"]))
     if result.get("opensanctions") is not None:
-        for key, val in (result["opensanctions"].get("explanations") or {}).items():
+        os_result = result["opensanctions"]
+        match = os_result.get("match")
+        if match is not None:
+            parts.append(Paragraph(f"Match-status: {_escape('match' if match else 'geen match')}", styles["body"]))
+        for tag in (os_result.get("properties") or {}).get("topics", []):
+            parts.append(Paragraph(f"Risico-tags: {_escape(tag)}", styles["body"]))
+        for key, val in (os_result.get("explanations") or {}).items():
             if (val or {}).get("score", 0) > 0:
-                parts.append(Paragraph(f"&bull; explanations: {_escape(key)} (score {_escape(val.get('score'))})", styles["body"]))
-        os_datasets = result["opensanctions"].get("datasets") or []
+                parts.append(Paragraph(f"&bull; explanations: {_escape(key)} (score {_escape(round((val.get('score') or 0) * 100))})", styles["body"]))
+        os_datasets = os_result.get("datasets") or []
         if os_datasets:
             parts.append(Paragraph(f"Bronnen: {_escape(', '.join(os_datasets))}", styles["body"]))
-        if result["opensanctions"].get("url"):
-            parts.append(Paragraph(f"Details: {_escape(result['opensanctions'].get('url'))}", styles["body"]))
+        if os_result.get("url"):
+            parts.append(Paragraph(f"Details: {_escape(os_result.get('url'))}", styles["body"]))
     parts.append(Spacer(1, 4))
     return parts
 
@@ -78,6 +125,8 @@ def render_search_pdf(payload: dict) -> bytes:
     story.append(Paragraph("<b>Dataversies</b>", styles["h2"]))
     meta = payload.get("meta", {}) or {}
     story.append(Paragraph(f"EU-lijst generatie: {_escape(meta.get('generation_date', 'onbekend'))}", body))
+    if meta.get("last_modified"):
+        story.append(Paragraph(f"EU-lijst laatste wijziging: {_escape(meta['last_modified'])}", body))
     pep_meta = payload.get("pep_meta", {}) or {}
     story.append(Paragraph(f"PEP-update: {_escape(pep_meta.get('updated_at', 'onbekend'))}", body))
     story.append(Spacer(1, 4 * mm))

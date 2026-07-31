@@ -61,7 +61,7 @@ def test_render_contains_required_sections():
     data = render_search_pdf(_payload())
     # Reportlab codeert content-streams (ASCII85 + zlib); decoderen maakt tekst doorzoekbaar.
     decoded = _decoded_text(data)
-    for needle in [b"JORGE FERNANDEZ", b"Uitgevoerd", b"Dennis", b"OpenSanctions", b"Disclaimer", b"90"]:
+    for needle in [b"JORGE FERNANDEZ", b"Uitgevoerd", b"Dennis", b"OpenSanctions", b"Disclaimer", b"90", b"EU-lijst laatste wijziging"]:
         assert needle in decoded
 
 
@@ -81,12 +81,61 @@ def test_render_opensanctions_result():
         "opensanctions": {
             "id": "NK-9",
             "url": "https://opensanctions.org/entities/NK-9",
+            "match": True,
             "explanations": {"name_match": {"score": 0.9}},
             "datasets": ["eu_fsf"],
+            "properties": {"topics": ["sanction", "role.politician"]},
         },
     }])
     data = render_search_pdf(payload)
+    decoded = _decoded_text(data)
     assert data[:4] == b"%PDF"
+    assert b"Match-status: match" in decoded
+    assert b"Risico-tags: sanction" in decoded
+    assert b"Risico-tags: role.politician" in decoded
+    assert b"score 90" in decoded
+
+
+def test_render_pep_result_fields():
+    payload = _payload()
+    decoded = _decoded_text(render_search_pdf(payload))
+    assert b"PRIMERO SAN LUIS" in decoded
+    assert b"role.pep" in decoded
+
+
+def test_render_eu_result_fields():
+    payload = _payload(results=[{
+        "source": "eu",
+        "score": 92,
+        "entity": {
+            "name": "ALIAS BV",
+            "eu_reference_number": "EU.123",
+            "united_nations_id": "UN-777",
+            "aliases": [
+                {"whole_name": "Alias One", "function": "Diplomat"},
+                {"whole_name": "Alias Two"},
+                {"whole_name": "Alias Three"},
+                {"whole_name": "Alias Four"},
+                {"whole_name": "Alias Five"},
+                {"whole_name": "Alias Six"},
+            ],
+            "citizenships": [{"description": "Russian Federation", "iso2": "RU"}],
+            "birthdates": [{"date": "", "year": "1971", "place": "Kabul", "city": ""}],
+            "regulations": [{"number_title": "2022/123", "programme": "XX", "publication_url": "https://eur-lex.europa.eu/x"}],
+            "remarks": ["Opmerking test"],
+        },
+        "eu": {"matched_alias": "Alias One", "details": []},
+        "opensanctions": None,
+        "pep": None,
+    }])
+    decoded = _decoded_text(render_search_pdf(payload))
+    assert b"Aliassen: Alias One, Alias Two, Alias Three, Alias Four, Alias Five" in decoded
+    assert b"VN-id: UN-777" in decoded
+    assert b"Nationaliteit: Russian Federation" in decoded
+    assert b"Functie: Diplomat" in decoded
+    assert b"Geboortedata/-plaats: 1971 Kabul" in decoded
+    assert b"2022/123" in decoded
+    assert b"Opmerking test" in decoded
 
 
 def test_render_eu_result_with_empty_details():
