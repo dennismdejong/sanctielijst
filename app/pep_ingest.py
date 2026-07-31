@@ -41,8 +41,11 @@ def list_pep_datasets(index: dict) -> list[dict]:
         )
         if resource is None:
             continue
+        name = ds.get("name")
+        if not name:
+            continue
         result.append({
-            "name": ds["name"],
+            "name": name,
             "version": ds.get("version", ""),
             "resource": resource,
         })
@@ -93,9 +96,10 @@ def load_pep_manifest(root_dir: Path) -> dict:
     if not manifest_path.exists():
         return {}
     try:
-        return json.loads(manifest_path.read_text())
+        data = json.loads(manifest_path.read_text())
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _source_entry(version: str, resource: dict, status: str, error: str = "") -> dict:
@@ -171,5 +175,8 @@ def refresh_pep(
     result = {"updated_at": datetime.now(timezone.utc).isoformat(), "sources": sources, "stats": stats}
     if not dry_run:
         root_dir.mkdir(parents=True, exist_ok=True)
-        (root_dir / MANIFEST_FILENAME).write_text(json.dumps(result, indent=2))
+        manifest_path = root_dir / MANIFEST_FILENAME
+        tmp = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(result, indent=2))
+        os.replace(tmp, manifest_path)
     return result

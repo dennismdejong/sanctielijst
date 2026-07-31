@@ -24,7 +24,7 @@ def parse_args(argv=None):
 
 
 def _emit(args, text: str) -> None:
-    print(text)
+    print(text, flush=True)
     if args.log:
         Path(args.log).open("a").write(text + "\n")
 
@@ -33,7 +33,7 @@ def run_once(args) -> int:
     try:
         index = pep_ingest.fetch_index()
     except Exception as exc:
-        print(f"FATAAL: index download mislukt: {exc}", file=sys.stderr)
+        print(f"FATAAL: index download mislukt: {exc}", file=sys.stderr, flush=True)
         return 1
 
     def log(msg: str) -> None:
@@ -72,7 +72,12 @@ def run_loop(args) -> int:
         last_code = run_once(args)
         if _STOP["flag"]:
             break
-        time.sleep(args.interval * 3600)
+        deadline = time.monotonic() + args.interval * 3600
+        while not _STOP["flag"]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(60, remaining))
     return last_code
 
 

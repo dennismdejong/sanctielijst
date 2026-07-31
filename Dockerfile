@@ -9,6 +9,7 @@ COPY app/ ./app/
 COPY scripts/ ./scripts/
 
 ENV PEP_DATA_DIR=/data/pep
+ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["python", "scripts/update_pep.py"]
 CMD ["--interval", "168"]
