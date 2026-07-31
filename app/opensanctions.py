@@ -47,7 +47,7 @@ def match_opensanctions(
             "explanations": r.get("explanations", {}),
             "datasets": r.get("datasets", []),
             "properties": r.get("properties", {}),
-            "url": f"https://opensanctions.org/entities/{r.get('id', '')}",
+            "url": f"https://opensanctions.org/entities/{r.get('id', '')}" if r.get("id") else "",
         }
         for r in response.get("results", [])
     ]

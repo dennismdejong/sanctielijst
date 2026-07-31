@@ -1,12 +1,19 @@
+import dataclasses
+import logging
 import os
 import time
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import ingest, matcher, opensanctions
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -35,7 +42,7 @@ def _serialize_eu_result(result: matcher.EuMatchResult, query_name: str) -> dict
         "eu": {
             "total_score": result.total_score,
             "matched_alias": result.matched_alias,
-            "details": [d.__dict__ for d in result.details],
+            "details": [dataclasses.asdict(d) for d in result.details],
         },
         "opensanctions": None,
     }
@@ -72,6 +79,8 @@ def create_app(
         entities, meta = ingest.load_index(cache_dir)
     else:
         meta = {}
+    if os_api_key is None:
+        os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
     state = {"entities": entities, "meta": meta}
     opensanctions_active = bool(os_api_key)
 
@@ -105,11 +114,13 @@ def create_app(
     def refresh():
         try:
             meta = ingest.refresh(cache_dir)
+            meta["source"] = "fresh"
             state["entities"] = ingest.parse_export((cache_dir / ingest.XML_FILENAME).read_bytes())
             state["meta"] = meta
             return _status()
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Verversen mislukt: {exc}")
+        except Exception:
+            logger.exception("Verversen mislukt")
+            raise HTTPException(status_code=503, detail="Verversen mislukt")
 
     @app.get("/api/search")
     def search(
@@ -126,6 +137,8 @@ def create_app(
             birth_place=(birth_place or "").strip() or None,
             entity_type=entity_type,
         )
+        if not query.name:
+            raise HTTPException(status_code=422, detail="Naam is verplicht")
         results = []
         warnings = []
         for r in matcher.search_eu(state["entities"], query):
@@ -137,8 +150,10 @@ def create_app(
                 ):
                     results.append(_serialize_os_result(r))
             except Exception:
+                logger.exception("OpenSanctions match failed")
                 warnings.append("OpenSanctions tijdelijk niet beschikbaar")
         results.sort(key=lambda r: r["score"], reverse=True)
+        results = results[:matcher.MAX_RESULTS]
         return {
             "query": {
                 "name": query.name,

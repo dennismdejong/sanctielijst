@@ -133,9 +133,12 @@ def load_index(cache_dir: Path, url: str = DATASET_URL, ttl: int = CACHE_TTL) ->
     meta_path = cache_dir / META_FILENAME
     meta = {}
     if meta_path.exists():
-        meta = json.loads(meta_path.read_text())
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            meta = {}
     age = time.time() - meta.get("cached_at", 0) if meta.get("cached_at") else None
-    stale = age is None or age > ttl
+    stale = not xml_path.exists() or age is None or age > ttl
     if stale:
         try:
             meta = refresh(cache_dir, url)

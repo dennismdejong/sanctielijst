@@ -122,7 +122,7 @@ def score_entity(entity: dict, query: SearchQuery) -> EuMatchResult | None:
     if query.nationality:
         s = nationality_score(query.nationality, entity["citizenships"])
         weights.append(WEIGHT_NATIONALITY)
-        label = "Nationaliteit match" if s >= 85 else f"Nationaliteit ({s}%)"
+        label = "Nationaliteit match" if s == 100 else f"Nationaliteit ({s}%)"
         details.append(MatchDetail("nationaliteit", s, label))
     if query.birth_place:
         s = birth_place_score(query.birth_place, entity["birthdates"])

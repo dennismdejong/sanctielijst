@@ -42,7 +42,7 @@ function euCard(item) {
       return bits.join(", ");
     });
   const birthLine = births.length ? `<p class="muted">Geboren: ${births.map(escapeHtml).join(" · ")}</p>` : "";
-  const natLine = entity.citizenships.length ? `<p class="muted">Nationaliteit: ${entity.citizenships.map((c) => escapeHtml(c.description || c.iso2)).join(", ")}</p>` : "";
+  const natLine = (entity.citizenships || []).length ? `<p class="muted">Nationaliteit: ${entity.citizenships.map((c) => escapeHtml(c.description || c.iso2)).join(", ")}</p>` : "";
   return `
     <article class="card">
       <div class="card-head">
@@ -74,7 +74,7 @@ function osCard(item) {
         ${sourceBadge(["opensanctions"])}
       </div>
       <p class="ref">Schema: ${escapeHtml(entity.schema || "-")}</p>
-      <p class="score-line">Score: <strong>${os.score.toFixed(2)}</strong> (${os.match ? "match" : "geen match"}) ${exp}</p>
+      <p class="score-line">Score: <strong>${Number(os.score).toFixed(2)}</strong> (${os.match ? "match" : "geen match"}) ${exp}</p>
       ${topics ? `<p class="muted">Risico-tags: ${topics}</p>` : ""}
       ${os.datasets ? `<p class="muted">Datasets: ${escapeHtml(datasets)}</p>` : ""}
       <p class="muted"><a href="${escapeHtml(os.url)}" target="_blank" rel="noopener">Open op opensanctions.org</a></p>
@@ -101,9 +101,18 @@ function renderResults(data) {
 }
 
 async function loadStatus() {
+  let res;
   try {
-    const res = await fetch("/api/status");
-    if (!res.ok) return;
+    res = await fetch("/api/status");
+  } catch {
+    statusLine.textContent = "Status niet beschikbaar";
+    return;
+  }
+  if (!res.ok) {
+    statusLine.textContent = "Status niet beschikbaar";
+    return;
+  }
+  try {
     const s = await res.json();
     const parts = [
       `${s.entity_count.toLocaleString("nl-NL")} records`,

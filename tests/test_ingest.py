@@ -132,3 +132,23 @@ def test_load_index_raises_when_no_cache_and_download_fails(monkeypatch, tmp_pat
     monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError, match="boom"):
         load_index(tmp_path, ttl=0)
+
+
+def test_load_index_corrupt_meta_falls_back(monkeypatch, tmp_path):
+    xml = (Path(__file__).parent / "fixtures" / "eu_sample.xml").read_bytes()
+    (tmp_path / "eu_sanctions.xml").write_bytes(xml)
+    (tmp_path / "cache_meta.json").write_text("{not json")
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: xml)
+    entities, meta = load_index(tmp_path, ttl=86400)
+    assert len(entities) == 2
+    assert meta["source"] == "fresh"
+
+
+def test_load_index_missing_xml_with_fresh_meta_redownloads(monkeypatch, tmp_path):
+    xml = (Path(__file__).parent / "fixtures" / "eu_sample.xml").read_bytes()
+    meta = {"cached_at": 9999999999, "generated_at": "2026-07-28T11:43:32+02:00", "entity_count": 2}
+    (tmp_path / "cache_meta.json").write_text(json.dumps(meta))
+    monkeypatch.setattr("app.ingest.download_xml", lambda *a, **k: xml)
+    entities, meta = load_index(tmp_path, ttl=86400)
+    assert len(entities) == 2
+    assert meta["source"] == "fresh"

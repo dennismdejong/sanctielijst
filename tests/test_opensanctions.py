@@ -1,4 +1,3 @@
-import json
 from app.opensanctions import match_opensanctions
 
 

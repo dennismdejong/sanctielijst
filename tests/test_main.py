@@ -1,6 +1,3 @@
-from pathlib import Path
-import json
-
 from fastapi.testclient import TestClient
 
 from app.main import create_app
@@ -27,9 +24,6 @@ ENTITIES = [
     make_entity("EU.471.56", "Abdul Hai Hazem Abdul Qader", year=1971, country="AF", place="Kabul"),
     make_entity("EU.2", "Rosneft", subject_type="enterprise", country="RU"),
 ]
-
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "eu_sample.xml"
-
 
 def test_health():
     client = TestClient(create_app(entities=ENTITIES))
@@ -74,6 +68,33 @@ def test_search_requires_name():
     assert resp.status_code == 422
 
 
+def test_search_whitespace_name_returns_422():
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/search", params={"name": "   "})
+    assert resp.status_code == 422
+
+
+def test_os_api_key_defaults_from_env(monkeypatch):
+    monkeypatch.setenv("OPENSANCTIONS_API_KEY", "KEY")
+    client = TestClient(create_app(entities=ENTITIES))
+    data = client.get("/api/status").json()
+    assert data["opensanctions_active"] is True
+
+
+def test_refresh_reports_fresh_source(tmp_path, monkeypatch):
+    import app.main as main
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / main.ingest.XML_FILENAME).write_bytes(b"<export/>")
+    monkeypatch.setattr(main.ingest, "refresh", lambda *a, **k: {"cached_at": 1, "generated_at": "x", "entity_count": 2, "source": "fresh"})
+    monkeypatch.setattr(main.ingest, "parse_export", lambda *a, **k: ENTITIES)
+    client = TestClient(create_app(entities=ENTITIES, cache_dir=cache_dir))
+    resp = client.post("/api/refresh")
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "fresh"
+
+
 def test_search_with_opensanctions_merges(monkeypatch):
     import app.main as main
 
@@ -116,7 +137,7 @@ def test_search_no_match_returns_empty():
     assert data["results"] == []
 
 
-def test_index_serves_html(tmp_path, monkeypatch):
+def test_index_serves_html(tmp_path):
     static = tmp_path / "static"
     static.mkdir()
     (static / "index.html").write_text("<h1>hi</h1>")
