@@ -635,7 +635,7 @@ git commit -m "feat: PEP refresh pipeline with manifest and skip logic"
 **Interfaces:**
 - Consumes: `app.pep_ingest` (`fetch_index`, `refresh_pep`, `default_root`).
 - Produces:
-  - `parse_args(argv: list[str] | None = None) -> argparse.Namespace` — flags: `--root` (default `default_root()`), `--force`, `--dry-run`, `--limit N`, `--interval HOURS` (float, default 0), `--log FILE`.
+  - `parse_args(argv: list[str] | None = None) -> argparse.Namespace` — flags: `--root` (default `default_root()`), `--force`, `--dry-run`, `--limit N`, `--interval HOURS` (float, default 0), `--once` (forces single run even with `--interval`), `--log FILE`.
   - `run_once(args) -> int` — `0` bij succes (ook met per-bron-fouten), `1` bij fatale fout (index onbereikbaar).
   - `run_loop(args) -> int` — draait `run_once` elke `args.interval * 3600` seconden; stopt graceful op SIGTERM/SIGINT.
   - `main(argv: list[str] | None = None) -> int` — kiest loop vs once.
