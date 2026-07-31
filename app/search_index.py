@@ -13,6 +13,7 @@ MAX_RESULTS = 20
 INDEX_ENV = "PEP_INDEX_ENABLED"
 DB_FILENAME = "search.sqlite"
 FTM_FILENAME = "entities.ftm.json"
+SCHEMA_VERSION = 2
 
 
 def default_db_path() -> Path:
@@ -192,6 +193,7 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -
     try:
         db = _open(new_path)
         db.executescript(SCHEMA)
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         db.executemany(
             "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, positions, datasets, eu_ref, raw) "
             "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :positions, :datasets, :eu_ref, :raw)",
@@ -346,7 +348,18 @@ def _newest_input_mtime(eu_xml: Path, pep_root: Path) -> float:
 def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path) -> bool:
     if not db_path.exists():
         return False
-    return db_path.stat().st_mtime >= _newest_input_mtime(eu_xml, pep_root)
+    if db_path.stat().st_mtime < _newest_input_mtime(eu_xml, pep_root):
+        return False
+    db = None
+    try:
+        db = _open(db_path)
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+    except Exception:
+        return False
+    finally:
+        if db is not None:
+            db.close()
+    return version >= SCHEMA_VERSION
 
 
 def load_stats(db) -> dict:

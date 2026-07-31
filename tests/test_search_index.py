@@ -273,7 +273,7 @@ def test_search_birth_year_and_nationality(tmp_path):
 import os
 import time
 
-from app.search_index import ensure_index, index_fresh, load_stats, rebuild_index
+from app.search_index import ensure_index, index_fresh, load_stats, rebuild_index, SCHEMA_VERSION
 
 
 EU_EXPORT = (
@@ -293,6 +293,19 @@ def test_index_fresh_logic(tmp_path):
     assert index_fresh(db_path, eu_xml, tmp_path) is True
     future = time.time() + 1000
     os.utime(eu_xml, (future, future))
+    assert index_fresh(db_path, eu_xml, tmp_path) is False
+
+
+def test_index_fresh_schema_version_bump(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    build_fixture(tmp_path, db_path)
+    assert index_fresh(db_path, eu_xml, tmp_path) is True
+    db = _open(db_path)
+    db.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+    db.commit()
+    db.close()
     assert index_fresh(db_path, eu_xml, tmp_path) is False
 
 
@@ -319,7 +332,7 @@ def test_ensure_index_corrupt_db_not_ready(tmp_path):
     eu_xml.write_bytes(EU_EXPORT)
     db_path = tmp_path / "search.sqlite"
     db_path.write_bytes(b"kapot")
-    assert index_fresh(db_path, eu_xml, tmp_path) is True
+    assert index_fresh(db_path, eu_xml, tmp_path) is False
     result = ensure_index(db_path, eu_xml, tmp_path)
     assert result["ready"] is False
     assert result["db"] is None
