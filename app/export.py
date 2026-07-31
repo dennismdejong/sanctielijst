@@ -32,7 +32,7 @@ def _result_paragraphs(result: dict, styles) -> list:
     source = result.get("source", "?")
     source_label = {"eu": "EU sanctielijst", "pep": "PEP", "opensanctions": "OpenSanctions"}.get(source, source)
     parts = [Paragraph(f"<b>{_escape(result['entity'].get('name', ''))}</b> — score {result.get('score', 0)}/100 ({_escape(source_label)})", styles["h3"])]
-    details = result.get(source, {}).get("details") or result.get("pep", {}).get("details") or []
+    details = (result.get(source) or {}).get("details") or (result.get("pep") or {}).get("details") or []
     for d in details:
         parts.append(Paragraph(f"&bull; {_escape(d.get('label', ''))}", styles["body"]))
     entity = result.get("entity", {})
@@ -40,8 +40,17 @@ def _result_paragraphs(result: dict, styles) -> list:
         parts.append(Paragraph(f"EU-referentie: {_escape(entity.get('eu_reference_number', ''))}", styles["body"]))
     if result.get("pep") is not None:
         for ds in result["pep"].get("datasets", []):
-            parts.append(Paragraph(f"Bron: {_escape(ds.get('title', ''))} ({_escape(ds.get('country', '').upper())}) — {_escape(ds.get('url', ''))}", styles["body"]))
+            parts.append(Paragraph(f"Bron: {_escape(ds.get('title', ''))} ({_escape((ds.get('country') or '').upper())}) — {_escape(ds.get('url', ''))}", styles["body"]))
         parts.append(Paragraph(f"Details: {_escape(result['pep'].get('url', ''))}", styles["body"]))
+    if result.get("opensanctions") is not None:
+        for key, val in (result["opensanctions"].get("explanations") or {}).items():
+            if (val or {}).get("score", 0) > 0:
+                parts.append(Paragraph(f"&bull; explanations: {_escape(key)} (score {_escape(val.get('score'))})", styles["body"]))
+        os_datasets = result["opensanctions"].get("datasets") or []
+        if os_datasets:
+            parts.append(Paragraph(f"Bronnen: {_escape(', '.join(os_datasets))}", styles["body"]))
+        if result["opensanctions"].get("url"):
+            parts.append(Paragraph(f"Details: {_escape(result['opensanctions'].get('url'))}", styles["body"]))
     parts.append(Spacer(1, 4))
     return parts
 

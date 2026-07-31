@@ -71,6 +71,37 @@ def test_render_empty_results():
     assert b"Geen overeenkomsten" in _decoded_text(data)
 
 
+def test_render_opensanctions_result():
+    payload = _payload(results=[{
+        "source": "opensanctions",
+        "score": 80,
+        "entity": {"name": "JORGE FERNÁNDEZ", "schema": "Person"},
+        "eu": None,
+        "pep": None,
+        "opensanctions": {
+            "id": "NK-9",
+            "url": "https://opensanctions.org/entities/NK-9",
+            "explanations": {"name_match": {"score": 0.9}},
+            "datasets": ["eu_fsf"],
+        },
+    }])
+    data = render_search_pdf(payload)
+    assert data[:4] == b"%PDF"
+
+
+def test_render_eu_result_with_empty_details():
+    payload = _payload(results=[{
+        "source": "eu",
+        "score": 100,
+        "entity": {"name": "Persoon", "eu_reference_number": "EU.1"},
+        "eu": {"matched_alias": "Persoon", "details": []},
+        "opensanctions": None,
+        "pep": None,
+    }])
+    data = render_search_pdf(payload)
+    assert data[:4] == b"%PDF"
+
+
 def test_render_many_results_paginates():
     payload = _payload(results=[])
     for i in range(30):
