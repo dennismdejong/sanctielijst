@@ -1,6 +1,6 @@
 # Compliance Zoeker
 
-Web-app om te zoeken in de EU sanctielijsten (personen en bedrijven) én de OpenSanctions PEP-data (politiek prominente personen), met fuzzy matching en per-kenmerk uitleg waarom een resultaat matcht. Optioneel ook wereldwijde screening via de OpenSanctions `/match`-API.
+Web-app om te zoeken in de EU sanctielijsten (personen en bedrijven) én de OpenSanctions PEP-data (politiek prominente personen), met fuzzy matching en per-kenmerk uitleg waarom een resultaat matcht. Optioneel ook aanvullende wereldwijde sanctie-screening via de OpenSanctions `/match`-API (OFAC, VN, VK, etc.).
 
 ## Installatie
 
@@ -12,9 +12,9 @@ pip install -r requirements.txt
 
 ## Data
 
-De app leest de EU sanctielijst (XML 1.1, ~25 MB) uit `data/eu/` (env `EU_DATA_DIR`). De download gebeurt door de downloader (`scripts/update_eu.py`, zie "Wekelijks bijwerken EU-data"); de app downloadt niet meer zelf. `POST /api/refresh` voert dezelfde manifest-refresh direct uit.
+De app leest de EU sanctielijst (XML 1.1, ~25 MB) uit `data/eu/` (env `EU_DATA_DIR`). De download gebeurt door de downloader (`scripts/update_eu.py`, zie "Wekelijks bijwerken EU-data"); de app downloadt niet meer zelf. `POST /api/refresh` downloadt de EU-lijst (via dezelfde manifest-check) én herbouwt daarna de zoekindex op de achtergrond.
 
-Daarnaast zoekt de app in `data/search.sqlite`, een SQLite+FTS5-zoekindex over de EU- én de OpenSanctions PEP-data (zie "Wekelijks bijwerken PEP-data"). Het pad is te overschrijven met de `SEARCH_DB`-env; default is `data/search.sqlite`. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat); de EU-lijst wordt altijd geïndexeerd. `POST /api/refresh` ververst alleen de EU-lijst, niet de PEP-data; verfris de PEP-data door de downloader uit te voeren: `.venv/bin/python scripts/update_pep.py --once`.
+Daarnaast zoekt de app in `data/search.sqlite`, een SQLite+FTS5-zoekindex over de EU- én de OpenSanctions PEP-data (zie "Wekelijks bijwerken PEP-data"). Het pad is te overschrijven met de `SEARCH_DB`-env (of `SEARCH_DATA_DIR`); default is `data/search.sqlite`. In de container hoort dit bestand op een persistent volume te staan, zodat de index niet bij elke herstart opnieuw wordt opgebouwd. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat); de EU-lijst wordt altijd geïndexeerd. `POST /api/refresh` haalt de PEP-data zelf niet op — draai daarvoor `scripts/update_pep.py --once` (refresh herbouwt wél de zoekindex met de al gedownloade PEP-data).
 
 ## Starten
 
@@ -32,14 +32,14 @@ Het rapport wordt gegenereerd met **reportlab** — een nieuwe dependency in `re
 
 ## OpenSanctions (optioneel)
 
-Vul een gratis API-key in (https://www.opensanctions.org/account/, vrij voor niet-commercieel gebruik):
+Naast de lokale EU-lijst en de gedownloade PEP-data kun je met een API-key extra screening doen via de OpenSanctions `/match`-API. Die draait op sanctie-topics (OFAC, VN, VK, etc.) — PEP-resultaten komen uit de lokaal gedownloade data, niet uit deze API. De key is gratis voor niet-commercieel gebruik via https://www.opensanctions.org/account/ (voor commercieel gebruik geldt een licentie):
 
 ```bash
 cp .env.example .env
 # zet je key in .env
 ```
 
-De app leest `OPENSANCTIONS_API_KEY` uit de omgeving of `.env`.
+De app leest `OPENSANCTIONS_API_KEY` uit de omgeving of `.env`. Zonder key draait de app volledig op de lokale EU- en PEP-data.
 
 ## Wekelijks bijwerken EU-data (data.europa.eu)
 

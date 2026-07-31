@@ -10,6 +10,7 @@ services:
     volumes:
       - pep-data:/data/pep
       - eu-data:/data/eu
+      - search-data:/app/data
     restart: unless-stopped
 
   pep-downloader:
@@ -37,3 +38,4 @@ services:
 volumes:
   pep-data:
   eu-data:
+  search-data:
