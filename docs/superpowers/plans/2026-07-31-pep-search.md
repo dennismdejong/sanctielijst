@@ -299,7 +299,7 @@ def load_or_build_index(root_dir: Path, force: bool = False) -> dict | None:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_pep_index.py -v`
-Expected: 9 passed.
+Expected: 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -500,7 +500,7 @@ def search_pep(
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_pep_index.py -v`
-Expected: 17 passed (9 + 8).
+Expected: 16 passed (8 + 8).
 
 - [ ] **Step 5: Commit**
 
