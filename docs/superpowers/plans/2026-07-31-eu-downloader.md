@@ -1017,11 +1017,29 @@ def _read_generation_date(xml_bytes: bytes) -> str:
 
 Apply these edits to `app/main.py`:
 
-Edit 1 — imports (replace `import time` and the two `from . import ...` lines so the top of the module reads):
+Edit 1 — imports. The top of the module currently reads:
 ```python
 import dataclasses
 import logging
 import os
+import threading
+import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from . import ingest, matcher, opensanctions
+from . import pep_index
+```
+Replace it with (keeps `import threading` from the parallel PEP background-load work, removes now-unused `import time`, adds `datetime`):
+```python
+import dataclasses
+import logging
+import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1077,7 +1095,34 @@ def _data_age_hours(downloaded_at: str | None) -> float | None:
     return round((datetime.now(timezone.utc) - parsed).total_seconds() / 3600, 1)
 ```
 
-Edit 3 — `create_app` signature and EU loading (replace the current `def create_app(...)` header through the `state = {...}` line):
+Edit 3 — `create_app` signature and EU loading. The current block (which already includes the parallel PEP background-load logic `pep_sync`/`pep_loading`/`_load_pep_index`) is:
+```python
+def create_app(
+    entities: list[dict] | None = None,
+    os_api_key: str | None = None,
+    cache_dir: Path = CACHE_DIR,
+    static_dir: Path = STATIC_DIR,
+    pep_root: Path = PEP_ROOT,
+    pep_sync: bool | None = None,
+) -> FastAPI:
+    if entities is None:
+        entities, meta = ingest.load_index(cache_dir)
+    else:
+        meta = {}
+    if os_api_key is None:
+        os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
+    if pep_sync is None:
+        pep_sync = os.environ.get("PEP_INDEX_SYNC", "").strip().lower() in ("1", "true", "yes")
+    state = {"entities": entities, "meta": meta, "pep": None, "pep_loading": False}
+    if _pep_enabled(pep_root):
+        if pep_sync:
+            state["pep"] = pep_index.load_or_build_index(pep_root)
+        else:
+            state["pep_loading"] = True
+            threading.Thread(target=_load_pep_index, args=(state, pep_root), daemon=True).start()
+    opensanctions_active = bool(os_api_key)
+```
+Replace it with (keeps the PEP logic, renames `cache_dir` to `eu_root`, reads EU data from the manifest-managed dir):
 ```python
 def create_app(
     entities: list[dict] | None = None,
@@ -1085,6 +1130,7 @@ def create_app(
     eu_root: Path = EU_ROOT,
     static_dir: Path = STATIC_DIR,
     pep_root: Path = PEP_ROOT,
+    pep_sync: bool | None = None,
 ) -> FastAPI:
     meta = eu_ingest.load_eu_manifest(eu_root)
     if entities is None:
@@ -1097,15 +1143,47 @@ def create_app(
             meta.setdefault("status", "missing")
     if os_api_key is None:
         os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
-    pep = pep_index.load_or_build_index(pep_root) if _pep_enabled(pep_root) else None
-    state = {"entities": entities, "meta": meta, "pep": pep}
+    if pep_sync is None:
+        pep_sync = os.environ.get("PEP_INDEX_SYNC", "").strip().lower() in ("1", "true", "yes")
+    state = {"entities": entities, "meta": meta, "pep": None, "pep_loading": False}
+    if _pep_enabled(pep_root):
+        if pep_sync:
+            state["pep"] = pep_index.load_or_build_index(pep_root)
+        else:
+            state["pep_loading"] = True
+            threading.Thread(target=_load_pep_index, args=(state, pep_root), daemon=True).start()
+    opensanctions_active = bool(os_api_key)
 ```
 
-Edit 4 — `_status()` body (replace the return dict of `_status`, keeping the `pep_index` block):
+Edit 4 — `_status()` body. The current body is:
+```python
+    def _status() -> dict:
+        cached_at = state["meta"].get("cached_at")
+        age_hours = round((time.time() - cached_at) / 3600, 1) if cached_at else None
+        pep = state["pep"]
+        pep_status = "loading" if state["pep_loading"] else ("ready" if pep is not None else "disabled")
+        return {
+            "cached_at": cached_at,
+            "generated_at": state["meta"].get("generated_at"),
+            "entity_count": len(state["entities"]),
+            "data_age_hours": age_hours,
+            "opensanctions_active": opensanctions_active,
+            "source": state["meta"].get("source", "unknown"),
+            "pep_index": {
+                "enabled": pep is not None or state["pep_loading"],
+                "entity_count": len(pep.get("entities", [])) if pep else 0,
+                "datasets_count": len(pep.get("datasets", {})) if pep else 0,
+                "source": pep.get("source") if pep else None,
+                "status": pep_status,
+            },
+        }
+```
+Replace it with (fields now sourced from the EU manifest; keeps the `pep_index` block untouched):
 ```python
     def _status() -> dict:
         meta = state["meta"]
         pep = state["pep"]
+        pep_status = "loading" if state["pep_loading"] else ("ready" if pep is not None else "disabled")
         return {
             "cached_at": meta.get("downloaded_at"),
             "generated_at": meta.get("generation_date"),
@@ -1114,10 +1192,11 @@ Edit 4 — `_status()` body (replace the return dict of `_status`, keeping the `
             "opensanctions_active": opensanctions_active,
             "source": meta.get("status", "unknown"),
             "pep_index": {
-                "enabled": pep is not None,
+                "enabled": pep is not None or state["pep_loading"],
                 "entity_count": len(pep.get("entities", [])) if pep else 0,
                 "datasets_count": len(pep.get("datasets", {})) if pep else 0,
                 "source": pep.get("source") if pep else None,
+                "status": pep_status,
             },
         }
 ```
