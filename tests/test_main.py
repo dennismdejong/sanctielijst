@@ -87,20 +87,6 @@ def test_os_api_key_defaults_from_env(monkeypatch):
     assert data["opensanctions_active"] is True
 
 
-def test_refresh_reports_fresh_source(tmp_path, monkeypatch):
-    import app.main as main
-
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
-    (cache_dir / main.ingest.XML_FILENAME).write_bytes(b"<export/>")
-    monkeypatch.setattr(main.ingest, "refresh", lambda *a, **k: {"cached_at": 1, "generated_at": "x", "entity_count": 2, "source": "fresh"})
-    monkeypatch.setattr(main.ingest, "parse_export", lambda *a, **k: ENTITIES)
-    client = TestClient(create_app(entities=ENTITIES, cache_dir=cache_dir))
-    resp = client.post("/api/refresh")
-    assert resp.status_code == 200
-    assert resp.json()["source"] == "fresh"
-
-
 def test_search_with_opensanctions_merges(monkeypatch):
     import app.main as main
 
@@ -246,3 +232,54 @@ def test_pep_background_load(tmp_path, monkeypatch):
     assert ready
     assert data["pep_index"]["entity_count"] == 1
     assert client.get("/api/search", params={"name": "JORGE FERNANDEZ"}).json()["results"][0]["source"] == "pep"
+
+
+def test_default_eu_root_uses_env(monkeypatch):
+    from pathlib import Path
+
+    from app import main as main_module
+    monkeypatch.setenv("EU_DATA_DIR", "/data/eu")
+    assert main_module.default_eu_root() == Path("/data/eu")
+    monkeypatch.delenv("EU_DATA_DIR", raising=False)
+    assert main_module.default_eu_root() == main_module.EU_ROOT
+
+
+def test_refresh_success(tmp_path, monkeypatch):
+    import app.main as main
+
+    eu_root = tmp_path / "eu"
+    eu_root.mkdir()
+    manifest = {"status": "ok", "downloaded_at": "2026-07-31T12:00:00+00:00", "generation_date": "2026-07-28T11:43:32+02:00", "entity_count": 2}
+    monkeypatch.setattr(main.eu_ingest, "refresh_eu", lambda *a, **k: manifest)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=eu_root))
+    resp = client.post("/api/refresh")
+    assert resp.status_code == 200
+    assert resp.json()["source"] == "ok"
+
+
+def test_refresh_head_failure_returns_503(tmp_path, monkeypatch):
+    import app.main as main
+
+    eu_root = tmp_path / "eu"
+    eu_root.mkdir()
+    monkeypatch.setattr(main.eu_ingest, "refresh_eu", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    client = TestClient(create_app(entities=ENTITIES, eu_root=eu_root))
+    resp = client.post("/api/refresh")
+    assert resp.status_code == 503
+
+
+def test_status_source_from_manifest(tmp_path):
+    import json
+
+    eu_root = tmp_path / "eu"
+    eu_root.mkdir()
+    (eu_root / "manifest.json").write_text(json.dumps({
+        "status": "ok",
+        "downloaded_at": "2026-07-31T12:00:00+00:00",
+        "generation_date": "2026-07-28T11:43:32+02:00",
+    }))
+    client = TestClient(create_app(entities=ENTITIES, eu_root=eu_root))
+    data = client.get("/api/status").json()
+    assert data["source"] == "ok"
+    assert data["generated_at"] == "2026-07-28T11:43:32+02:00"
+    assert data["entity_count"] == 2

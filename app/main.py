@@ -2,7 +2,7 @@ import dataclasses
 import logging
 import os
 import threading
-import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -10,14 +10,13 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import ingest, matcher, opensanctions
+from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_index
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
-CACHE_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def default_pep_root() -> Path:
@@ -25,6 +24,23 @@ def default_pep_root() -> Path:
 
 
 PEP_ROOT = default_pep_root()
+
+
+def default_eu_root() -> Path:
+    return Path(os.environ.get("EU_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data" / "eu")))
+
+
+EU_ROOT = default_eu_root()
+
+
+def _data_age_hours(downloaded_at: str | None) -> float | None:
+    if not downloaded_at:
+        return None
+    try:
+        parsed = datetime.fromisoformat(downloaded_at)
+    except ValueError:
+        return None
+    return round((datetime.now(timezone.utc) - parsed).total_seconds() / 3600, 1)
 
 def _serialize_eu_result(result: matcher.EuMatchResult, query_name: str) -> dict:
     entity = result.entity
@@ -132,15 +148,20 @@ def _load_pep_index(state: dict, pep_root: Path) -> None:
 def create_app(
     entities: list[dict] | None = None,
     os_api_key: str | None = None,
-    cache_dir: Path = CACHE_DIR,
+    eu_root: Path = EU_ROOT,
     static_dir: Path = STATIC_DIR,
     pep_root: Path = PEP_ROOT,
     pep_sync: bool | None = None,
 ) -> FastAPI:
+    meta = eu_ingest.load_eu_manifest(eu_root)
     if entities is None:
-        entities, meta = ingest.load_index(cache_dir)
-    else:
-        meta = {}
+        xml_path = eu_root / eu_ingest.XML_FILENAME
+        if xml_path.exists():
+            entities = ingest.parse_export(xml_path.read_bytes())
+            meta.setdefault("status", "ok")
+        else:
+            entities = []
+            meta.setdefault("status", "missing")
     if os_api_key is None:
         os_api_key = os.environ.get("OPENSANCTIONS_API_KEY")
     if pep_sync is None:
@@ -165,17 +186,16 @@ def create_app(
         return {"status": "ok"}
 
     def _status() -> dict:
-        cached_at = state["meta"].get("cached_at")
-        age_hours = round((time.time() - cached_at) / 3600, 1) if cached_at else None
+        meta = state["meta"]
         pep = state["pep"]
         pep_status = "loading" if state["pep_loading"] else ("ready" if pep is not None else "disabled")
         return {
-            "cached_at": cached_at,
-            "generated_at": state["meta"].get("generated_at"),
+            "cached_at": meta.get("downloaded_at"),
+            "generated_at": meta.get("generation_date"),
             "entity_count": len(state["entities"]),
-            "data_age_hours": age_hours,
+            "data_age_hours": _data_age_hours(meta.get("downloaded_at")),
             "opensanctions_active": opensanctions_active,
-            "source": state["meta"].get("source", "unknown"),
+            "source": meta.get("status", "unknown"),
             "pep_index": {
                 "enabled": pep is not None or state["pep_loading"],
                 "entity_count": len(pep.get("entities", [])) if pep else 0,
@@ -192,10 +212,11 @@ def create_app(
     @app.post("/api/refresh")
     def refresh():
         try:
-            meta = ingest.refresh(cache_dir)
-            meta["source"] = "fresh"
-            state["entities"] = ingest.parse_export((cache_dir / ingest.XML_FILENAME).read_bytes())
-            state["meta"] = meta
+            manifest = eu_ingest.refresh_eu(eu_root)
+            state["meta"] = manifest
+            xml_path = eu_root / eu_ingest.XML_FILENAME
+            if xml_path.exists():
+                state["entities"] = ingest.parse_export(xml_path.read_bytes())
             return _status()
         except Exception:
             logger.exception("Verversen mislukt")
