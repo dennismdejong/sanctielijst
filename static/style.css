@@ -77,6 +77,16 @@ button:hover { opacity: 0.9; }
 }
 #export-btn:hover { background: #eef3ff; opacity: 1; }
 
+.export-field { display: flex; gap: 0.5rem; align-items: flex-end; }
+.export-field select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+}
+.export-field #export-btn { margin-top: 0; }
+
 .status-line { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
 
 .warnings {

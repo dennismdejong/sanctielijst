@@ -24,11 +24,15 @@ uvicorn app.main:create_app --factory --port 8000
 
 Open http://localhost:8000.
 
-## PDF-export
+## Export (PDF / CSV / Excel)
 
-Vanuit het zoekscherm kun je resultaten exporteren als PDF-rapport (`GET /api/search/export`). Het rapport bevat de zoekopdracht (en optioneel de auteur), de uitvoeringsdatum/-tijd, de gebruikte dataversies (EU-lijstgeneratie en PEP-update), de resultaten met scores, bronnen en match-details, en een disclaimer.
+Vanuit het zoekscherm kun je resultaten exporteren, in **PDF**, **CSV** of **Excel** (`.xlsx`) — kies het formaat naast de exportknop. Endpoint: `GET /api/search/export?format=pdf|csv|xlsx` (default `pdf`). De rapporten bevatten de zoekopdracht (en optioneel de auteur), de uitvoeringsdatum/-tijd, de gebruikte dataversies (EU-lijstgeneratie en PEP-update), en de resultaten met scores, bronnen en match-details.
 
-Het rapport wordt gegenereerd met **reportlab** — een nieuwe dependency in `requirements.txt` (pure Python, werkt zonder extra systeempakketten, ook in de container-image).
+Het PDF-rapport wordt gegenereerd met **reportlab**; CSV/XLSX met **openpyxl** — beide in `requirements.txt` (pure Python, werken zonder extra systeempakketten, ook in de container-image).
+
+## Audit-log
+
+Elke zoekopdracht en export wordt gelogd (tijdstip, client-IP, query, aantal resultaten, bronnen) in `data/audit.sqlite` (env `AUDIT_DB`, gitignored). Beheer kan de log bekijken op `/audit`, beveiligd met `AUDIT_ADMIN_TOKEN` (Bearer-header; het endpoint is 404 zolang die env niet gezet is). Achter een reverse proxy: uvicorn met `--proxy-headers` zodat het echte client-IP wordt vastgelegd.
 
 ## OpenSanctions (optioneel)
 

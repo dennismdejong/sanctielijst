@@ -47,8 +47,13 @@
             <label for="author">Uitgevoerd door (optioneel)</label>
             <input type="text" id="author" name="author" autocomplete="name" placeholder="bijv. J. Jansen">
           </div>
-          <div class="field">
-            <button type="button" id="export-btn">Exporteer PDF</button>
+          <div class="field export-field">
+            <select id="export-format" aria-label="Exportformaat">
+              <option value="pdf">PDF</option>
+              <option value="csv">CSV</option>
+              <option value="xlsx">Excel</option>
+            </select>
+            <button type="button" id="export-btn">Exporteer</button>
           </div>
         </div>
         <button type="submit" id="search-btn">Zoeken</button>

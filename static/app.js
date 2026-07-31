@@ -264,5 +264,7 @@ exportBtn.addEventListener("click", () => {
   if (entityType) params.set("entity_type", entityType);
   const author = document.getElementById("author").value.trim();
   if (author) params.set("author", author);
+  const format = document.getElementById("export-format").value;
+  if (format) params.set("format", format);
   window.open(`/api/search/export?${params}`, "_blank");
 });
