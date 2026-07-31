@@ -10,6 +10,7 @@ from app.search_index import (
     tokens,
     _eu_records,
     _pep_records,
+    _positions_by_holder,
 )
 
 
@@ -96,6 +97,65 @@ def test_pep_records_filters():
     assert jorge["datasets"] == ["ds1"]
 
 
+def pep_person(entity_id="Q1", name="JORGE FERNÁNDEZ"):
+    return {"id": entity_id, "caption": name, "schema": "Person", "target": True,
+            "datasets": ["ds1"], "properties": {"name": [name]}}
+
+
+def pep_position(entity_id, role):
+    return {"id": entity_id, "caption": role, "schema": "Position", "target": False,
+            "datasets": ["ds1"], "properties": {"name": [role]}}
+
+
+def pep_occupancy(holder, post, status="current", start="", end=""):
+    props = {"holder": [holder], "post": [post], "status": [status]}
+    if start:
+        props["startDate"] = [start]
+    if end:
+        props["endDate"] = [end]
+    return {"id": f"O-{holder}-{post}", "caption": "Occupancy", "schema": "Occupancy",
+            "target": False, "datasets": ["ds1"], "properties": props}
+
+
+def test_pep_records_positions(tmp_path):
+    write_ftm(tmp_path, "ds1", [
+        pep_person(),
+        pep_position("P1", "Minister of Defence"),
+        pep_occupancy("Q1", "P1", status="current", start="2020-01-01", end="2024-01-01"),
+    ])
+    records = _pep_records(tmp_path, _positions_by_holder(tmp_path))
+    assert records[0]["positions"] == [
+        {"role": "Minister of Defence", "status": "current", "start": "2020-01-01", "end": "2024-01-01"}
+    ]
+
+
+def test_pep_records_positions_fallback_to_post_id(tmp_path):
+    write_ftm(tmp_path, "ds1", [
+        pep_person(),
+        pep_occupancy("Q1", "P-UNKNOWN"),
+    ])
+    records = _pep_records(tmp_path, _positions_by_holder(tmp_path))
+    assert records[0]["positions"] == [{"role": "P-UNKNOWN", "status": "current", "start": "", "end": ""}]
+
+
+def test_pep_records_positions_multiple_sorted_newest_first(tmp_path):
+    write_ftm(tmp_path, "ds1", [
+        pep_person(),
+        pep_position("P1", "Minister"),
+        pep_position("P2", "Senator"),
+        pep_occupancy("Q1", "P1", start="2020-01-01"),
+        pep_occupancy("Q1", "P2", start="2023-01-01"),
+    ])
+    records = _pep_records(tmp_path, _positions_by_holder(tmp_path))
+    assert [p["role"] for p in records[0]["positions"]] == ["Senator", "Minister"]
+
+
+def test_pep_records_positions_default_empty(tmp_path):
+    write_ftm(tmp_path, "ds1", [pep_person()])
+    records = _pep_records(tmp_path)
+    assert records[0]["positions"] == []
+
+
 def test_pep_record_raw_is_none():
     import tempfile
     root = Path(tempfile.mkdtemp())
@@ -120,6 +180,23 @@ def build_fixture(root, db_path, include_eu=True, include_pep=True):
              "properties": {"name": ["JORGE FERNÁNDEZ"], "birthDate": ["1965-03-01"], "citizenship": ["ar"]}},
         ])
     return build_index(db_path, eu, root)
+
+
+def test_build_index_positions_persisted(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    write_ftm(tmp_path, "ds1", [
+        pep_person(),
+        pep_position("P1", "Minister of Defence"),
+        pep_occupancy("Q1", "P1", status="current", start="2020-01-01", end="2024-01-01"),
+    ])
+    build_index(db_path, [], tmp_path)
+    db = _open(db_path)
+    cols = [row[1] for row in db.execute("PRAGMA table_info(entities)")]
+    assert "positions" in cols
+    row = db.execute("SELECT positions FROM entities WHERE id = 'Q1'").fetchone()
+    assert json.loads(row["positions"]) == [
+        {"role": "Minister of Defence", "status": "current", "start": "2020-01-01", "end": "2024-01-01"}
+    ]
 
 
 def test_build_index_counts(tmp_path):

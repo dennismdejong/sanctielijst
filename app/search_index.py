@@ -83,7 +83,43 @@ def _extract_entity(line: str) -> dict | None:
     }
 
 
-def _pep_records(pep_root: Path) -> list[dict]:
+def _positions_by_holder(pep_root: Path) -> dict[str, list[dict]]:
+    positions = {}
+    occupancies = []
+    for ftm in sorted(pep_root.glob(f"*/{FTM_FILENAME}")):
+        with ftm.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                schema = data.get("schema")
+                if schema == "Position":
+                    positions[data.get("id", "")] = data.get("caption") or ""
+                elif schema == "Occupancy":
+                    occupancies.append(data)
+    by_holder: dict[str, list[dict]] = {}
+    for occ in occupancies:
+        props = occ.get("properties") or {}
+        for holder in props.get("holder") or []:
+            for post in props.get("post") or []:
+                by_holder.setdefault(holder, []).append({
+                    "role": positions.get(post, post),
+                    "status": (props.get("status") or [""])[0],
+                    "start": (props.get("startDate") or [""])[0],
+                    "end": (props.get("endDate") or [""])[0],
+                })
+    for entries in by_holder.values():
+        entries.sort(key=lambda p: p["start"], reverse=True)
+    return by_holder
+
+
+def _pep_records(pep_root: Path, positions_map: dict[str, list[dict]] | None = None) -> list[dict]:
     records = []
     for ftm in sorted(pep_root.glob(f"*/{FTM_FILENAME}")):
         with ftm.open(encoding="utf-8") as fh:
@@ -108,6 +144,7 @@ def _pep_records(pep_root: Path) -> list[dict]:
                     "datasets": entity["datasets"],
                     "eu_ref": "",
                     "raw": None,
+                    "positions": list(positions_map.get(entity["id"], [])) if positions_map else [],
                 })
     return records
 
@@ -126,6 +163,7 @@ CREATE TABLE entities (
   citizenships TEXT NOT NULL,
   political TEXT NOT NULL,
   topics TEXT NOT NULL,
+  positions TEXT NOT NULL DEFAULT '[]',
   datasets TEXT NOT NULL,
   eu_ref TEXT,
   raw TEXT
@@ -146,7 +184,8 @@ def _schema(db) -> int:
 
 def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -> dict:
     eu_entities = eu_entities or []
-    records = _eu_records(eu_entities) + _pep_records(pep_root)
+    positions_map = _positions_by_holder(pep_root)
+    records = _eu_records(eu_entities) + _pep_records(pep_root, positions_map)
     new_path = db_path.with_suffix(db_path.suffix + ".new")
     new_path.unlink(missing_ok=True)
     db = None
@@ -154,8 +193,8 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -
         db = _open(new_path)
         db.executescript(SCHEMA)
         db.executemany(
-            "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, datasets, eu_ref, raw) "
-            "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :datasets, :eu_ref, :raw)",
+            "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, positions, datasets, eu_ref, raw) "
+            "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :positions, :datasets, :eu_ref, :raw)",
             [{
                 "source": r["source"],
                 "id": r["id"],
@@ -168,6 +207,7 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -
                 "citizenships": json.dumps(r["citizenships"], ensure_ascii=False),
                 "political": json.dumps(r["political"], ensure_ascii=False),
                 "topics": json.dumps(r["topics"], ensure_ascii=False),
+                "positions": json.dumps(r.get("positions") or [], ensure_ascii=False),
                 "datasets": json.dumps(r["datasets"], ensure_ascii=False),
                 "eu_ref": r["eu_ref"],
                 "raw": json.dumps(r["raw"], ensure_ascii=False) if r["raw"] is not None else None,
