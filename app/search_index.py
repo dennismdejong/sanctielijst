@@ -264,3 +264,41 @@ def search(db, name, birth_year=None, nationality=None, birth_place=None, entity
         results.append({"entity": entity, "score": total, "matched_name": matched, "details": details})
     results.sort(key=lambda r: r["score"], reverse=True)
     return results[:max_results]
+
+
+from . import ingest
+
+
+def _newest_input_mtime(eu_xml: Path, pep_root: Path) -> float:
+    newest = 0.0
+    for path in [eu_xml, pep_root / "datasets.json"]:
+        if path.exists():
+            newest = max(newest, path.stat().st_mtime)
+    for ftm in pep_root.glob(f"*/{FTM_FILENAME}"):
+        newest = max(newest, ftm.stat().st_mtime)
+    return newest
+
+
+def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path) -> bool:
+    if not db_path.exists():
+        return False
+    return db_path.stat().st_mtime >= _newest_input_mtime(eu_xml, pep_root)
+
+
+def load_stats(db) -> dict:
+    eu = db.execute("SELECT count(*) FROM entities WHERE source = 'eu'").fetchone()[0]
+    pep = db.execute("SELECT count(*) FROM entities WHERE source = 'pep'").fetchone()[0]
+    sources = db.execute("SELECT count(DISTINCT json_each.value) FROM entities, json_each(datasets) WHERE source = 'pep'").fetchone()[0]
+    return {"eu_count": eu, "pep_count": pep, "total": eu + pep, "source_count": sources}
+
+
+def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+    if index_fresh(db_path, eu_xml, pep_root):
+        db = _open(db_path)
+        return {"db": db, "ready": True, "stats": load_stats(db)}
+    return {"db": None, "ready": False, "stats": None}
+
+
+def rebuild_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+    entities = ingest.parse_export(eu_xml.read_bytes()) if eu_xml.exists() else []
+    return build_index(db_path, entities, pep_root)

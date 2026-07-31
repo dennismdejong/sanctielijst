@@ -172,3 +172,65 @@ def test_search_birth_year_and_nationality(tmp_path):
     db = _open(db_path)
     results = search(db, "JORGE", birth_year=1965, nationality="ar", threshold=60)
     assert results and results[0]["score"] >= 90
+
+
+import os
+import time
+
+from app.search_index import ensure_index, index_fresh, load_stats, rebuild_index
+
+
+EU_EXPORT = (
+    b'<export xmlns:fsd="http://eu.europa.ec/fpi/fsd/export">'
+    b'<fsd:sanctionEntity logicalId="EU.1" euReferenceNumber="EU.1">'
+    b'<fsd:subjectType code="person"/>'
+    b'<fsd:nameAlias wholeName="John Smith"/>'
+    b"</fsd:sanctionEntity></export>"
+)
+
+
+def test_index_fresh_logic(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    build_fixture(tmp_path, db_path)
+    assert index_fresh(db_path, eu_xml, tmp_path) is True
+    future = time.time() + 1000
+    os.utime(eu_xml, (future, future))
+    assert index_fresh(db_path, eu_xml, tmp_path) is False
+
+
+def test_ensure_index_opens_fresh(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    build_fixture(tmp_path, db_path)
+    result = ensure_index(db_path, eu_xml, tmp_path)
+    assert result["ready"] is True
+    assert result["stats"]["total"] == 2
+
+
+def test_ensure_index_not_ready_when_missing(tmp_path):
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(b"<export/>")
+    result = ensure_index(tmp_path / "search.sqlite", eu_xml, tmp_path)
+    assert result["ready"] is False
+    assert result["db"] is None
+
+
+def test_load_stats(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    build_fixture(tmp_path, db_path)
+    stats = load_stats(_open(db_path))
+    assert stats["eu_count"] == 1
+    assert stats["pep_count"] == 1
+
+
+def test_rebuild_index(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    build_fixture(tmp_path, db_path)
+    stats = rebuild_index(db_path, eu_xml, tmp_path)
+    assert stats["total"] == 2
+    assert index_fresh(db_path, eu_xml, tmp_path)
