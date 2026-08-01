@@ -8,6 +8,7 @@ const loginPanel = document.getElementById("login-panel");
 const authBar = document.getElementById("auth-bar");
 let currentUser = null;
 let authRequired = false;
+let authMethods = [];
 
 function escapeHtml(value) {
   return String(value)
@@ -172,6 +173,10 @@ async function loadStatus() {
   }
   try {
     const s = await res.json();
+    if (s.auth) {
+      authRequired = !!s.auth.required;
+      authMethods = s.auth.methods || [];
+    }
     const parts = [
       `${s.entity_count.toLocaleString("nl-NL")} records`,
       euStatusLabel(s.source),
@@ -252,8 +257,12 @@ function setLoggedIn(user) {
 
 function setLoggedOut() {
   currentUser = null;
-  authBar.hidden = false;
   authBar.textContent = "";
+  if (!authRequired) {
+    authBar.hidden = true;
+    return;
+  }
+  authBar.hidden = false;
   const link = document.createElement("button");
   link.type = "button";
   link.id = "login-link";
