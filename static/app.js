@@ -446,12 +446,25 @@ async function addWatch() {
 }
 
 async function deleteWatch(watchId) {
+  let res;
   try {
-    await fetch(`/api/watchlists/${encodeURIComponent(watchId)}`, {
+    res = await fetch(`/api/watchlists/${encodeURIComponent(watchId)}`, {
       method: "DELETE",
       credentials: "same-origin",
     });
-  } catch {}
+  } catch {
+    showWatchNotice("Bewaking verwijderen mislukt: server niet bereikbaar.");
+    return;
+  }
+  if (res.status === 401) {
+    requireLogin("Log in om een bewaking te verwijderen.");
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    showWatchNotice(`Bewaking verwijderen mislukt: ${body.detail || "fout"}`);
+    return;
+  }
   localStorage.removeItem("watchlist." + watchId);
   await loadWatchlists();
 }
@@ -485,26 +498,24 @@ async function loadWatchlists() {
   });
   watchlistList.innerHTML = watchlists.map((w) => {
     const entry = readWatchEntry(w.id);
-    const name = (entry && entry.name) || w.label;
+    const name = entry && entry.name ? entry.name : "";
+    const nameHtml = name ? `<strong>${escapeHtml(name)}</strong>` : '<span class="muted">Naam onbekend</span>';
     const hits = byWatch[w.id] || [];
     const newCount = hits.filter((hit) => {
       const match = hit.match || {};
-      return !(entry && entry.known && entry.known[match.id]);
+      return !(entry && entry.known && (match.id in entry.known));
     }).length;
     const badge = newCount ? `<span class="badge watchlist-badge">${newCount} nieuw</span>` : "";
     return `
       <div class="watchlist-item">
         <div class="watchlist-name">
-          <strong>${escapeHtml(name)}</strong>
+          ${nameHtml}
           <span class="muted">${hits.length} hit(s)</span>
           ${badge}
         </div>
         <button type="button" class="watchlist-delete" data-id="${escapeHtml(w.id)}">Verwijder</button>
       </div>`;
   }).join("");
-  watchlistList.querySelectorAll(".watchlist-delete").forEach((btn) => {
-    btn.addEventListener("click", () => deleteWatch(btn.dataset.id));
-  });
 }
 
 async function rescanWatchlists() {
@@ -528,12 +539,16 @@ async function rescanWatchlists() {
     } catch {
       continue;
     }
+    if (res.status === 404) {
+      localStorage.removeItem(key);
+      continue;
+    }
     if (!res.ok) continue;
     const data = await res.json().catch(() => ({}));
     (data.hits || []).forEach((hit) => {
       const match = hit.match || {};
-      if (!match.id || entry.known[match.id]) return;
-      entry.known[match.id] = match.score || 0;
+      if (!match.id || match.id in entry.known) return;
+      entry.known[match.id] = match.score ?? 0;
       showWatchNotice(`Nieuwe match voor ${entry.name}: ${match.naam || match.id}`);
     });
     localStorage.setItem(key, JSON.stringify(entry));
@@ -567,6 +582,11 @@ init();
 window.setInterval(loadStatus, 60000);
 
 watchBtn.addEventListener("click", addWatch);
+
+watchlistList.addEventListener("click", (e) => {
+  const btn = e.target.closest(".watchlist-delete");
+  if (btn) deleteWatch(btn.dataset.id);
+});
 
 const exportBtn = document.getElementById("export-btn");
 exportBtn.addEventListener("click", () => {
