@@ -446,7 +446,9 @@ def test_export_csv_format(tmp_path, monkeypatch):
     assert resp.headers["content-type"] == "text/csv; charset=utf-8"
     assert "attachment" in resp.headers["content-disposition"]
     assert resp.content[:3] == b"\xef\xbb\xbf"
+    assert resp.content[3:6] != b"\xef\xbb\xbf"
     body = resp.content.decode("utf-8-sig")
+    assert not body.startswith("\ufeff")
     assert "naam;score;bron;datasets;match-details;eu_referentie;geboortedata;nationaliteit;links" in body
     assert "JORGE FERNÁNDEZ" in body
     assert b".csv" in resp.headers["content-disposition"].encode()
@@ -946,6 +948,94 @@ def test_batch_row_limit_413(tmp_path, monkeypatch):
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
     text = "naam\n" + "\n".join(f"persoon-{i}" for i in range(5001)) + "\n"
     resp = client.post("/api/batch", files={"file": ("lijst.csv", _batch_csv(text), "text/csv")})
+    assert resp.status_code == 413
+
+
+def test_batch_invalid_birth_year_csv_is_per_row_error(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam;geboortejaar\nJORGE FERNANDEZ;onbekend\nJohn Smith;1971\n")
+    data = _wait_done(client, batch_id)
+    assert data["status"] == "done"
+    assert data["errors"] == [{"row_index": 2, "error": "Ongeldig geboortejaar"}]
+    by_name = {r["row"]["naam"]: r for r in data["rows"]}
+    assert by_name["JORGE FERNANDEZ"]["row"]["geboortejaar"] is None
+    assert by_name["JORGE FERNANDEZ"]["matches"] and by_name["JORGE FERNANDEZ"]["matches"][0]["source"] == "pep"
+    assert by_name["John Smith"]["row"]["geboortejaar"] == 1971
+
+
+def test_batch_xlsx_date_cell_birth_year(tmp_path, monkeypatch):
+    from datetime import datetime
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Naam", "Geboortejaar"])
+    ws.append(["JORGE FERNANDEZ", datetime(1965, 3, 1)])
+    ws.append(["John Smith", datetime(1971, 1, 1)])
+    buffer = BytesIO()
+    wb.save(buffer)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.post("/api/batch", files={"file": ("lijst.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert resp.status_code == 200, resp.text
+    data = _wait_done(client, resp.json()["batch_id"])
+    assert data["status"] == "done"
+    assert data["errors"] == []
+    by_name = {r["row"]["naam"]: r for r in data["rows"]}
+    assert by_name["JORGE FERNANDEZ"]["row"]["geboortejaar"] == 1965
+    assert by_name["John Smith"]["row"]["geboortejaar"] == 1971
+    assert by_name["JORGE FERNANDEZ"]["matches"] and by_name["JORGE FERNANDEZ"]["matches"][0]["source"] == "pep"
+
+
+def test_batch_xlsx_blank_and_styled_rows_ignored(tmp_path, monkeypatch):
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Naam"])
+    ws.append(["JORGE FERNANDEZ"])
+    ws.append([None])
+    ws.append([None])
+    ws["A5"].font = Font(bold=True)
+    buffer = BytesIO()
+    wb.save(buffer)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.post("/api/batch", files={"file": ("lijst.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert resp.status_code == 200, resp.text
+    data = _wait_done(client, resp.json()["batch_id"])
+    assert data["status"] == "done"
+    assert data["errors"] == []
+    assert data["total"] == 1
+    assert [r["row"]["naam"] for r in data["rows"]] == ["JORGE FERNANDEZ"]
+
+
+def test_batch_corrupt_xlsx_returns_400(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.post("/api/batch", files={"file": ("lijst.xlsx", b"dit is geen excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Ongeldig Excel-bestand"
+
+
+def test_batch_oversized_upload_413_before_parse(tmp_path, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    monkeypatch.setattr(main.batch, "parse_input", lambda *a, **k: (_ for _ in ()).throw(AssertionError("parse_input mag niet worden aangeroepen")))
+    monkeypatch.setattr(main.batch, "MAX_BATCH_BYTES", 10)
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.post("/api/batch", files={"file": ("lijst.csv", b"naam\nJORGE FERNANDEZ\n", "text/csv")})
     assert resp.status_code == 413
 
 

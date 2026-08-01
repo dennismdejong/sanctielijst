@@ -127,10 +127,70 @@ def test_parse_xlsx():
 
 
 def test_parse_xlsx_row_without_name_is_per_row_error():
-    content = _xlsx_bytes([["Naam"], ["Jan"], [None]])
+    content = _xlsx_bytes([["Naam", "Geboortejaar"], ["Jan", 1970], [None, 1980]])
     rows, errors = batch.parse_input("lijst.xlsx", content)
-    assert rows == [_row("Jan")]
+    assert rows == [_row("Jan", geboortejaar=1970)]
     assert errors == [{"row_index": 3, "error": "Ontbrekende naam"}]
+
+
+def test_parse_csv_invalid_birth_year_is_per_row_error():
+    content = _csv_bytes("naam;geboortejaar\nJan Jansen;1970\nPiet;onbekend\nMarie;1965\n")
+    rows, errors = batch.parse_input("lijst.csv", content)
+    assert errors == [{"row_index": 3, "error": "Ongeldig geboortejaar"}]
+    assert [r["naam"] for r in rows] == ["Jan Jansen", "Piet", "Marie"]
+    assert rows[0]["geboortejaar"] == 1970
+    assert rows[1]["geboortejaar"] is None
+    assert rows[2]["geboortejaar"] == 1965
+
+
+def test_parse_xlsx_date_cell_birth_year_becomes_year():
+    from datetime import datetime
+
+    content = _xlsx_bytes([["Naam", "Geboortejaar"], ["Björk", datetime(1965, 1, 1)]])
+    rows, errors = batch.parse_input("lijst.xlsx", content)
+    assert errors == []
+    assert rows == [_row("Björk", geboortejaar=1965)]
+
+
+def test_parse_xlsx_corrupt_is_batch_input_error():
+    with pytest.raises(batch.BatchInputError) as exc_info:
+        batch.parse_input("lijst.xlsx", b"dit is geen excel")
+    assert exc_info.value.status_code == 400
+    assert str(exc_info.value) == "Ongeldig Excel-bestand"
+
+
+def test_parse_xlsx_skips_blank_and_styled_rows():
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Naam", "Geboortejaar"])
+    ws.append(["Jan", 1970])
+    ws.append([None, None])
+    ws.append(["Piet", 1980])
+    ws["A6"].font = Font(bold=True)
+    buffer = BytesIO()
+    wb.save(buffer)
+    rows, errors = batch.parse_input("lijst.xlsx", buffer.getvalue())
+    assert errors == []
+    assert [r["naam"] for r in rows] == ["Jan", "Piet"]
+    assert [r["geboortejaar"] for r in rows] == [1970, 1980]
+
+
+def test_parse_xlsx_blank_rows_do_not_count_toward_limit():
+    from openpyxl.styles import Font
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Naam"])
+    ws.append(["Jan"])
+    ws.append([None])
+    ws["A5"].font = Font(bold=True)
+    buffer = BytesIO()
+    wb.save(buffer)
+    rows, errors = batch.parse_input("lijst.xlsx", buffer.getvalue(), row_limit=1)
+    assert errors == []
+    assert [r["naam"] for r in rows] == ["Jan"]
 
 
 def test_parse_input_over_row_limit_signals_413():

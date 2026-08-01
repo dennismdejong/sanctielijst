@@ -654,7 +654,11 @@ def create_app(
         _check_roles(user, ("admin", "analist"))
         audit_user = user["username"] if user else None
         filename = file.filename or "lijst.csv"
-        content = await file.read()
+        if file.size is not None and file.size > batch.MAX_BATCH_BYTES:
+            raise HTTPException(status_code=413, detail="Bestand is te groot (max 50 MB)")
+        content = await file.read(batch.MAX_BATCH_BYTES + 1)
+        if len(content) > batch.MAX_BATCH_BYTES:
+            raise HTTPException(status_code=413, detail="Bestand is te groot (max 50 MB)")
         try:
             rows, errors = batch.parse_input(filename, content)
         except batch.RowLimitExceeded as exc:

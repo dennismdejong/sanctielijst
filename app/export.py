@@ -212,7 +212,7 @@ def render_search_csv(results: list[dict], query: dict) -> str:
     writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
     writer.writerow(_EXPORT_HEADERS)
     writer.writerows(_export_rows(results))
-    return "\ufeff" + output.getvalue()
+    return output.getvalue()
 
 
 def render_search_xlsx(results: list[dict], query: dict) -> bytes:

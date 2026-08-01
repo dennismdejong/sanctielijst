@@ -20,6 +20,7 @@ from openpyxl import load_workbook
 
 FIELDS = ["naam", "geboortejaar", "nationaliteit", "geboorteplaats", "type"]
 DEFAULT_ROW_LIMIT = 5000
+MAX_BATCH_BYTES = 50 * 1024 * 1024
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batch_jobs (
@@ -91,10 +92,14 @@ def _normalise_value(value) -> str | None:
     return text or None
 
 
-def _normalise_birth_year(value):
+def _normalise_birth_year(value) -> int | None:
     if value is None:
         return None
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if isinstance(value, datetime):
+        return value.year
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
         return int(value)
     text = str(value).strip()
     if not text:
@@ -102,7 +107,7 @@ def _normalise_birth_year(value):
     try:
         return int(text)
     except ValueError:
-        return text
+        return None
 
 
 def _build_rows(mapping: dict[str, int], raw_rows: list[tuple[int, list | tuple]]) -> tuple[list[dict], list[dict]]:
@@ -113,7 +118,13 @@ def _build_rows(mapping: dict[str, int], raw_rows: list[tuple[int, list | tuple]
         for field, index in mapping.items():
             if index < len(values):
                 value = values[index]
-                row[field] = _normalise_birth_year(value) if field == "geboortejaar" else _normalise_value(value)
+                if field == "geboortejaar":
+                    birth = _normalise_birth_year(value)
+                    if birth is None and value is not None and str(value).strip():
+                        errors.append({"row_index": row_index, "error": "Ongeldig geboortejaar"})
+                    row[field] = birth
+                else:
+                    row[field] = _normalise_value(value)
         if not row["naam"]:
             errors.append({"row_index": row_index, "error": "Ontbrekende naam"})
             continue
@@ -160,15 +171,18 @@ def _parse_csv(content: bytes, row_limit: int) -> tuple[list[dict], list[dict]]:
                 raise BatchInputError("Naam-kolom ontbreekt")
             continue
         raw_rows.append((len(raw_rows) + 2, values))
+        if len(raw_rows) > row_limit:
+            raise RowLimitExceeded(f"Bestand bevat meer dan {row_limit} regels")
     if not mapping:
         raise BatchInputError("Bestand is leeg")
-    if len(raw_rows) > row_limit:
-        raise RowLimitExceeded(f"Bestand bevat meer dan {row_limit} regels")
     return _build_rows(mapping, raw_rows)
 
 
 def _parse_xlsx(content: bytes, row_limit: int) -> tuple[list[dict], list[dict]]:
-    workbook = load_workbook(BytesIO(content), read_only=True)
+    try:
+        workbook = load_workbook(BytesIO(content), read_only=True)
+    except Exception as exc:
+        raise BatchInputError("Ongeldig Excel-bestand") from exc
     try:
         sheet = workbook.active
         iterator = sheet.iter_rows(values_only=True)
@@ -180,10 +194,16 @@ def _parse_xlsx(content: bytes, row_limit: int) -> tuple[list[dict], list[dict]]
             raise BatchInputError("Naam-kolom ontbreekt")
         raw_rows = []
         for row_index, values in enumerate(iterator, start=2):
+            if values is None or all(value is None or str(value).strip() == "" for value in values):
+                continue
             raw_rows.append((row_index, values))
-        if len(raw_rows) > row_limit:
-            raise RowLimitExceeded(f"Bestand bevat meer dan {row_limit} regels")
+            if len(raw_rows) > row_limit:
+                raise RowLimitExceeded(f"Bestand bevat meer dan {row_limit} regels")
         return _build_rows(mapping, raw_rows)
+    except BatchInputError:
+        raise
+    except Exception as exc:
+        raise BatchInputError("Ongeldig Excel-bestand") from exc
     finally:
         workbook.close()
 
