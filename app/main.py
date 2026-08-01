@@ -21,6 +21,7 @@ from . import batch
 from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_ingest
 from . import search_index
+from . import watchlist
 from .export import render_batch_csv, render_batch_pdf, render_search_csv, render_search_pdf, render_search_xlsx
 
 load_dotenv()
@@ -183,6 +184,28 @@ def _serialize_pep_result(result: dict, datasets_meta: dict) -> dict:
         },
         "eu": None,
         "opensanctions": None,
+    }
+
+
+def _to_watchlist_match(result: dict) -> dict:
+    """Map a serialized run_search result to the watchlist match contract."""
+    source = result.get("source")
+    entity = result.get("entity") or {}
+    if source == "eu":
+        match_id = entity.get("eu_reference_number") or ""
+        datasets = ["eu"]
+    elif source == "pep":
+        match_id = (result.get("pep") or {}).get("id") or ""
+        datasets = [d.get("id") for d in ((result.get("pep") or {}).get("datasets") or []) if d.get("id")]
+    else:
+        match_id = (result.get("opensanctions") or {}).get("id") or ""
+        datasets = list((result.get("opensanctions") or {}).get("datasets") or [])
+    return {
+        "id": match_id,
+        "naam": entity.get("name") or "",
+        "score": result.get("score", 0),
+        "bron": source or "",
+        "datasets": datasets,
     }
 
 
@@ -357,6 +380,7 @@ def create_app(
             "generated_at": meta.get("generation_date"),
             "entity_count": stats.get("total", len(state["entities"])),
             "data_age_hours": _data_age_hours(meta.get("downloaded_at")),
+            "data_version": round(search_index._newest_input_mtime(eu_xml, pep_root), 3),
             "opensanctions_active": opensanctions_active,
             "source": meta.get("status", "unknown"),
             "auth": {"required": auth_required, "methods": methods},
@@ -470,6 +494,34 @@ def create_app(
         )
         results, _warnings = run_search(query, include_opensanctions=False)
         return results
+
+    def _log_watchlist(request: Request, watchlist_id: str, action: str, count: int, user: str | None = None) -> None:
+        try:
+            audit.log_event(
+                audit_db,
+                ip=request.client.host if request.client else "",
+                user=user,
+                user_agent=request.headers.get("user-agent", ""),
+                method=request.method,
+                path=request.url.path,
+                query={"watchlist_id": watchlist_id, "action": action},
+                result_count=count,
+                sources=[],
+                threshold=matcher.THRESHOLD,
+            )
+        except Exception:
+            logger.warning("Audit-log mislukt", exc_info=True)
+
+    def _watchlist_search_fn(name, birth_year=None, nationality=None, birth_place=None, entity_type=None):
+        query = matcher.SearchQuery(
+            name=name,
+            birth_year=birth_year,
+            nationality=nationality,
+            birth_place=birth_place,
+            entity_type=entity_type,
+        )
+        results, _warnings = run_search(query, include_opensanctions=False)
+        return [_to_watchlist_match(r) for r in results]
 
     @app.get("/api/audit")
     def audit_events(
@@ -776,6 +828,80 @@ def create_app(
         audit_user = user["username"] if user else None
         _log_batch(request, {"batch_id": batch_id, "format": "csv"}, 1, user=audit_user)
         return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.post("/api/watchlists")
+    def create_watchlist(
+        request: Request,
+        response: Response,
+        user: dict | None = Depends(get_current_user),
+        payload: dict | None = Body(default=None),
+    ):
+        _check_roles(user, ("admin", "analist", "viewer"))
+        owner = watchlist.get_or_create_key(request, response)
+        label = ((payload or {}).get("label") or "").strip()
+        record = watchlist.add_watchlist(watchlist.default_watchlist_db(), owner, label=label)
+        _log_watchlist(request, record["id"], "create", 0, user=user["username"] if user else None)
+        return {"watchlist": record}
+
+    @app.get("/api/watchlists")
+    def get_watchlists(
+        request: Request,
+        response: Response,
+        user: dict | None = Depends(get_current_user),
+    ):
+        _check_roles(user, ("admin", "analist", "viewer"))
+        owner = watchlist.get_or_create_key(request, response)
+        return {"watchlists": watchlist.list_watchlists(watchlist.default_watchlist_db(), owner)}
+
+    @app.delete("/api/watchlists/{watchlist_id}")
+    def delete_watchlist(
+        request: Request,
+        response: Response,
+        watchlist_id: str,
+        user: dict | None = Depends(get_current_user),
+    ):
+        _check_roles(user, ("admin", "analist", "viewer"))
+        owner = watchlist.get_or_create_key(request, response)
+        if not watchlist.delete_watchlist(watchlist.default_watchlist_db(), owner, watchlist_id):
+            raise HTTPException(status_code=404, detail="Watchlist niet gevonden")
+        _log_watchlist(request, watchlist_id, "delete", 0, user=user["username"] if user else None)
+        response.status_code = 204
+        return response
+
+    @app.post("/api/watchlists/{watchlist_id}/rescan")
+    def rescan_watchlist(
+        request: Request,
+        response: Response,
+        watchlist_id: str,
+        user: dict | None = Depends(get_current_user),
+        payload: dict | None = Body(default=None),
+    ):
+        _check_roles(user, ("admin", "analist", "viewer"))
+        owner = watchlist.get_or_create_key(request, response)
+        data = payload or {}
+        name = (data.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Naam is verplicht")
+        db_path = watchlist.default_watchlist_db()
+        owned = {w["id"] for w in watchlist.list_watchlists(db_path, owner)}
+        if watchlist_id not in owned:
+            raise HTTPException(status_code=404, detail="Watchlist niet gevonden")
+        fields = {k: data[k] for k in ("birth_year", "nationality", "birth_place", "entity_type") if data.get(k) is not None}
+        result = watchlist.rescan_watch(db_path, owner, watchlist_id, name, fields, _watchlist_search_fn, threshold=matcher.THRESHOLD)
+        _log_watchlist(request, watchlist_id, "rescan", result["new"], user=user["username"] if user else None)
+        return {"watchlist_id": result["watchlist_id"], "hits": result["hits"], "new": result["new"]}
+
+    @app.get("/api/watchlists/hits")
+    def get_watchlist_hits(
+        request: Request,
+        response: Response,
+        user: dict | None = Depends(get_current_user),
+        watchlist_id: str | None = Query(None),
+    ):
+        _check_roles(user, ("admin", "analist", "viewer"))
+        owner = watchlist.get_or_create_key(request, response)
+        hits = watchlist.list_hits(watchlist.default_watchlist_db(), owner, watchlist_id=watchlist_id)
+        return {"hits": hits}
 
     try:
         batch.mark_stale_jobs(batch.default_batch_db())
