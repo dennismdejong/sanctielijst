@@ -379,6 +379,19 @@ def test_rebuild_index(tmp_path):
     assert index_fresh(db_path, eu_xml, tmp_path)
 
 
+def test_index_fresh_future_mtime_acknowledged_after_rebuild(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    build_fixture(tmp_path, db_path)
+    assert index_fresh(db_path, eu_xml, tmp_path) is True
+    future = time.time() + 1000
+    os.utime(eu_xml, (future, future))
+    assert index_fresh(db_path, eu_xml, tmp_path) is False
+    rebuild_index(db_path, eu_xml, tmp_path)
+    assert index_fresh(db_path, eu_xml, tmp_path) is True
+
+
 def test_search_typo_still_finds_candidate(tmp_path):
     db_path = tmp_path / "search.sqlite"
     build_fixture(tmp_path, db_path)

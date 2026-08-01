@@ -226,19 +226,22 @@ def _fill_fts(db) -> None:
     db.execute("INSERT INTO names_fts (rowid, names_folded) SELECT rowid, names_folded FROM entities")
 
 
-def _write_meta(db, eu_count: int, pep_count: int, source_count: int) -> None:
+def _write_meta(db, eu_count: int, pep_count: int, source_count: int, newest_input_mtime: float) -> None:
     db.executemany(
         "INSERT INTO meta (key, value) VALUES (?,?)",
         [
             ("eu_count", str(eu_count)),
             ("pep_count", str(pep_count)),
             ("source_count", str(source_count)),
+            ("newest_input_mtime", str(newest_input_mtime)),
         ],
     )
 
 
-def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -> dict:
+def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path, *, newest_input_mtime: float | None = None) -> dict:
     eu_entities = eu_entities or []
+    if newest_input_mtime is None:
+        newest_input_mtime = _newest_pep_mtime(pep_root)
     new_path = db_path.with_suffix(db_path.suffix + ".new")
     new_path.unlink(missing_ok=True)
     db = None
@@ -254,7 +257,7 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -
         pep_count, source_count = _stream_pep(db, pep_root)
         _fill_positions(db)
         _fill_fts(db)
-        _write_meta(db, eu_count, pep_count, source_count)
+        _write_meta(db, eu_count, pep_count, source_count, newest_input_mtime)
         db.execute("DROP TABLE _occupancies")
         db.execute("DROP TABLE _positions")
         db.commit()
@@ -373,30 +376,39 @@ from . import ingest
 from . import matcher
 
 
-def _newest_input_mtime(eu_xml: Path, pep_root: Path) -> float:
+def _newest_pep_mtime(pep_root: Path) -> float:
     newest = 0.0
-    for path in [eu_xml, pep_root / "datasets.json"]:
-        if path.exists():
-            newest = max(newest, path.stat().st_mtime)
+    datasets = pep_root / "datasets.json"
+    if datasets.exists():
+        newest = max(newest, datasets.stat().st_mtime)
     for ftm in pep_root.glob(f"*/{FTM_FILENAME}"):
         newest = max(newest, ftm.stat().st_mtime)
+    return newest
+
+
+def _newest_input_mtime(eu_xml: Path, pep_root: Path) -> float:
+    newest = _newest_pep_mtime(pep_root)
+    if eu_xml.exists():
+        newest = max(newest, eu_xml.stat().st_mtime)
     return newest
 
 
 def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path) -> bool:
     if not db_path.exists():
         return False
-    if db_path.stat().st_mtime < _newest_input_mtime(eu_xml, pep_root):
-        return False
     db = None
     try:
         db = _open(db_path)
         version = db.execute("PRAGMA user_version").fetchone()[0]
+        row = db.execute("SELECT value FROM meta WHERE key = 'newest_input_mtime'").fetchone()
+        acknowledged = float(row[0]) if row is not None else db_path.stat().st_mtime
     except Exception:
         return False
     finally:
         if db is not None:
             db.close()
+    if acknowledged < _newest_input_mtime(eu_xml, pep_root):
+        return False
     return version >= SCHEMA_VERSION
 
 
@@ -428,4 +440,4 @@ def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
 
 def rebuild_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
     entities = ingest.parse_export(eu_xml.read_bytes()) if eu_xml.exists() else []
-    return build_index(db_path, entities, pep_root)
+    return build_index(db_path, entities, pep_root, newest_input_mtime=_newest_input_mtime(eu_xml, pep_root))

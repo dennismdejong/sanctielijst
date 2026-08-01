@@ -26,6 +26,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+REBUILD_SUBPROCESS_TIMEOUT = 600
 
 
 def default_pep_root() -> Path:
@@ -196,12 +197,20 @@ def _load_datasets_meta(pep_root: Path) -> dict:
 
 
 def _run_rebuild_subprocess(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
-    proc = subprocess.run(
-        [sys.executable, "-m", "app.rebuild",
-         "--db", str(db_path), "--eu-xml", str(eu_xml), "--pep-root", str(pep_root)],
-        capture_output=True,
-        text=True,
-    )
+    cmd = [sys.executable, "-m", "app.rebuild",
+           "--db", str(db_path), "--eu-xml", str(eu_xml), "--pep-root", str(pep_root)]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=REBUILD_SUBPROCESS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stderr = (exc.stderr or "").strip() or "geen stderr"
+        raise RuntimeError(
+            f"index rebuild subproces timeout na {REBUILD_SUBPROCESS_TIMEOUT}s: {stderr[-500:]}"
+        ) from exc
     if proc.returncode != 0:
         raise RuntimeError(f"index rebuild subproces exit {proc.returncode}: {proc.stderr[-500:]}")
     return json.loads(proc.stdout)

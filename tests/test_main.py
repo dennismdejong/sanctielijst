@@ -933,3 +933,57 @@ def test_status_triggers_rebuild_when_data_newer(tmp_path, monkeypatch):
     assert data["index"]["status"] == "building"
     assert called.wait(5)
     release.set()
+
+
+def test_status_no_endless_rebuild_with_future_input_mtime(tmp_path, monkeypatch):
+    import os
+    import threading
+    import time
+
+    import app.main as main
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    builds = []
+    done = threading.Event()
+    original_rebuild = search_index.rebuild_index
+
+    def real_rebuild(db_path, eu_xml, pep_root):
+        builds.append(1)
+        stats = original_rebuild(db_path, eu_xml, pep_root)
+        done.set()
+        return stats
+
+    monkeypatch.setattr(main.search_index, "rebuild_index", real_rebuild)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    assert client.get("/api/status").json()["index"]["status"] == "ready"
+    future = time.time() + 1000
+    os.utime(tmp_path / "ar_parliament" / "entities.ftm.json", (future, future))
+    assert client.get("/api/status").json()["index"]["status"] == "building"
+    assert done.wait(10)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if client.get("/api/status").json()["index"]["status"] == "ready":
+            break
+        time.sleep(0.02)
+    for _ in range(3):
+        assert client.get("/api/status").json()["index"]["status"] == "ready"
+    assert builds == [1]
+
+
+def test_build_index_subprocess_timeout_sets_error(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    import app.main as main
+
+    def fake_run(cmd, **kwargs):
+        raise sp.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 600), output="", stderr="bouw hangt")
+
+    monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    state = {"index_status": "building", "index_stats": None, "index_error": None}
+    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path)
+    assert state["index_status"] == "error"
+    assert "timeout" in state["index_error"].lower()
+    assert "600" in state["index_error"]
+    assert "bouw hangt" in state["index_error"]
