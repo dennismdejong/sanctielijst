@@ -3,6 +3,8 @@ import json
 import logging
 import secrets
 import os
+import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -193,20 +195,33 @@ def _load_datasets_meta(pep_root: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _run_rebuild_subprocess(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.rebuild",
+         "--db", str(db_path), "--eu-xml", str(eu_xml), "--pep-root", str(pep_root)],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"index rebuild subproces exit {proc.returncode}: {proc.stderr[-500:]}")
+    return json.loads(proc.stdout)
+
+
+def _run_rebuild(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+    if os.environ.get("PEP_INDEX_SUBPROCESS", "").strip().lower() in ("1", "true", "yes"):
+        return _run_rebuild_subprocess(db_path, eu_xml, pep_root)
+    return search_index.rebuild_index(db_path, eu_xml, pep_root)
+
+
 def _build_index(state: dict, db_path: Path, eu_xml: Path, pep_root: Path) -> None:
     try:
-        search_index.rebuild_index(db_path, eu_xml, pep_root)
-        db = search_index._open(db_path)
-        try:
-            state["index_stats"] = search_index.load_stats(db)
-        finally:
-            db.close()
+        state["index_stats"] = _run_rebuild(db_path, eu_xml, pep_root)
         state["index_status"] = "ready"
         state["index_error"] = None
-    except Exception:
+    except Exception as exc:
         logger.exception("Index-rebuild mislukt")
         state["index_status"] = "error"
-        state["index_error"] = "Index-rebuild mislukt"
+        state["index_error"] = f"Index-rebuild mislukt: {exc}"
 
 
 def create_app(
@@ -314,6 +329,11 @@ def create_app(
         return {"status": "ok"}
 
     def _status() -> dict:
+        if state["index_status"] == "ready" and not search_index.index_fresh(state["db_path"], eu_xml, pep_root):
+            with state["build_lock"]:
+                if state["index_status"] == "ready":
+                    state["index_status"] = "building"
+                    threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
         meta = state["meta"]
         stats = state["index_stats"] or {}
         return {

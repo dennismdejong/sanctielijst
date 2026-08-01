@@ -868,3 +868,68 @@ def test_audit_endpoint_allows_admin_role(auth_env):
     resp = client.get("/api/audit")
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
+
+
+def test_build_index_runs_rebuild_in_subprocess(tmp_path, monkeypatch):
+    import subprocess as sp
+    import sys as _sys
+
+    import app.main as main
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return sp.CompletedProcess(cmd, 0, stdout='{"eu_count": 1, "pep_count": 2, "total": 3, "source_count": 1}', stderr="")
+
+    monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    state = {"index_status": "building", "index_stats": None, "index_error": None}
+    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path)
+    assert state["index_status"] == "ready"
+    assert state["index_stats"]["total"] == 3
+    assert captured["cmd"][0] == _sys.executable
+    assert "app.rebuild" in captured["cmd"]
+
+
+def test_build_index_subprocess_failure_sets_error(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    import app.main as main
+
+    def fake_run(cmd, **kwargs):
+        return sp.CompletedProcess(cmd, 1, stdout="", stderr="boom")
+
+    monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    state = {"index_status": "building", "index_stats": None, "index_error": None}
+    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path)
+    assert state["index_status"] == "error"
+    assert "boom" in state["index_error"]
+
+
+def test_status_triggers_rebuild_when_data_newer(tmp_path, monkeypatch):
+    import os
+    import threading
+    import time
+
+    import app.main as main
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    called = threading.Event()
+    release = threading.Event()
+
+    def counting_rebuild(db_path, eu_xml, pep_root):
+        called.set()
+        release.wait(5)
+
+    monkeypatch.setattr(main.search_index, "rebuild_index", counting_rebuild)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    assert client.get("/api/status").json()["index"]["status"] == "ready"
+    future = time.time() + 1000
+    os.utime(tmp_path / "ar_parliament" / "entities.ftm.json", (future, future))
+    data = client.get("/api/status").json()
+    assert data["index"]["status"] == "building"
+    assert called.wait(5)
+    release.set()
