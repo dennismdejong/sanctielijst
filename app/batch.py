@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS batch_jobs (
   finished_at TEXT,
   progress INTEGER NOT NULL DEFAULT 0,
   total INTEGER NOT NULL DEFAULT 0,
-  errors INTEGER NOT NULL DEFAULT 0,
+  errors TEXT NOT NULL DEFAULT '[]',
   error_text TEXT
 )
 """
@@ -202,16 +202,18 @@ def parse_input(filename: str, content: bytes, row_limit: int = DEFAULT_ROW_LIMI
     return _parse_csv(content, row_limit)
 
 
-def create_job(db_path: Path, filename: str, rows: list[dict]) -> str:
+def create_job(db_path: Path, filename: str, rows: list[dict], errors: list[dict] | None = None) -> str:
     # ``filename`` is part of the public interface but the mandated schema does
     # not persist it; it is reserved for display/logging by the API layer.
+    # ``errors`` (per-row parse errors) is persisted as JSON in the errors column.
     init_batch_db(db_path)
     job_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
+    errors_json = json.dumps(errors or [], ensure_ascii=False)
     with _open(db_path) as conn:
         conn.execute(
-            "INSERT INTO batch_jobs (id, status, created_at, progress, total) VALUES (?, ?, ?, 0, ?)",
-            (job_id, "pending", now, len(rows)),
+            "INSERT INTO batch_jobs (id, status, created_at, progress, total, errors) VALUES (?, ?, ?, 0, ?, ?)",
+            (job_id, "pending", now, len(rows), errors_json),
         )
         conn.executemany(
             "INSERT INTO batch_results (batch_id, row_index, row_json, matches_json) VALUES (?, ?, ?, NULL)",
@@ -225,7 +227,11 @@ def get_job(db_path: Path, job_id: str) -> dict | None:
     init_batch_db(db_path)
     with _open(db_path) as conn:
         row = conn.execute("SELECT * FROM batch_jobs WHERE id = ?", (job_id,)).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    job = dict(row)
+    job["errors"] = json.loads(job["errors"]) if job["errors"] else []
+    return job
 
 
 def get_results(db_path: Path, job_id: str) -> list[dict]:

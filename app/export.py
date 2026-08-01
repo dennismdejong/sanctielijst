@@ -288,4 +288,4 @@ def render_batch_csv(job: dict, results: list[dict]) -> str:
             writer.writerow([item.get("row_index", 0) + 1, input_name, *exported])
         if not matches:
             writer.writerow([item.get("row_index", 0) + 1, input_name])
-    return "\ufeff" + output.getvalue()
+    return output.getvalue()

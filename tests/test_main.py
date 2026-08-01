@@ -928,6 +928,18 @@ def test_batch_unknown_job_returns_404():
     assert client.get("/api/batch/onbekend").status_code == 404
 
 
+def test_batch_surfaces_per_row_parse_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam;geboortejaar\nJan Jansen;1970\n;1980\n")
+    data = _wait_done(client, batch_id)
+    assert data["status"] == "done"
+    assert data["total"] == 1
+    assert data["errors"] == [{"row_index": 3, "error": "Ontbrekende naam"}]
+    assert [r["row"]["naam"] for r in data["rows"]] == ["Jan Jansen"]
+
+
 def test_batch_row_limit_413(tmp_path, monkeypatch):
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
@@ -978,7 +990,10 @@ def test_batch_report_csv(tmp_path, monkeypatch):
     assert resp.headers["content-type"] == "text/csv; charset=utf-8"
     assert "attachment" in resp.headers["content-disposition"]
     assert resp.content[:3] == b"\xef\xbb\xbf"
+    assert resp.content[3:6] != b"\xef\xbb\xbf"
     body = resp.content.decode("utf-8-sig")
+    assert not body.startswith("\ufeff")
+    assert body.startswith("regel;")
     assert "JORGE FERNÁNDEZ" in body
 
 

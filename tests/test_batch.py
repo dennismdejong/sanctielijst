@@ -157,13 +157,36 @@ def test_create_job_returns_uuid_and_roundtrips(tmp_path):
     assert job["status"] == "pending"
     assert job["total"] == 2
     assert job["progress"] == 0
-    assert job["errors"] == 0
+    assert job["errors"] == []
     assert job["finished_at"] is None
     assert job["created_at"]
 
 
 def test_get_job_unknown_returns_none(tmp_path):
     assert batch.get_job(tmp_path / "batch.sqlite", "onbekend") is None
+
+
+def test_create_job_stores_per_row_errors(tmp_path):
+    db_path = tmp_path / "batch.sqlite"
+    job_id = batch.create_job(
+        db_path,
+        "lijst.csv",
+        [_row("Jan")],
+        errors=[{"row_index": 3, "error": "Ontbrekende naam"}],
+    )
+    job = batch.get_job(db_path, job_id)
+    assert job["errors"] == [{"row_index": 3, "error": "Ontbrekende naam"}]
+
+
+def test_create_job_roundtrips_parse_input_errors(tmp_path):
+    db_path = tmp_path / "batch.sqlite"
+    content = _csv_bytes("naam;geboortejaar\nJan;1970\n;1980\n")
+    rows, errors = batch.parse_input("lijst.csv", content)
+    assert errors == [{"row_index": 3, "error": "Ontbrekende naam"}]
+    job_id = batch.create_job(db_path, "lijst.csv", rows, errors=errors)
+    job = batch.get_job(db_path, job_id)
+    assert job["errors"] == [{"row_index": 3, "error": "Ontbrekende naam"}]
+    assert job["total"] == 1
 
 
 def test_get_results_roundtrip(tmp_path):

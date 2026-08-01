@@ -662,7 +662,7 @@ def create_app(
         except batch.BatchInputError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         batch_db = batch.default_batch_db()
-        job_id = batch.create_job(batch_db, filename, rows)
+        job_id = batch.create_job(batch_db, filename, rows, errors=errors)
         _log_batch(request, {"batch_id": job_id, "filename": filename, "rows": len(rows), "errors": len(errors)}, len(rows), user=audit_user)
         threading.Thread(target=batch.process_job, args=(batch_db, job_id, _batch_search_fn), daemon=True).start()
         return {"batch_id": job_id}
