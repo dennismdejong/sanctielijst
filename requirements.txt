@@ -1,5 +1,6 @@
 fastapi==0.141.1
 uvicorn[standard]==0.52.0
+python-multipart==0.0.20
 rapidfuzz==3.14.5
 requests==2.34.2
 python-dotenv==1.2.2

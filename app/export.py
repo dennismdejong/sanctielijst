@@ -229,3 +229,63 @@ def render_search_xlsx(results: list[dict], query: dict) -> bytes:
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def render_batch_pdf(job: dict, results: list[dict], meta: dict) -> bytes:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, title=_TITLE)
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9, leading=12)
+    styles.add(body)
+    story = [
+        Paragraph(f"<b>{_TITLE} — Batchscreeningsrapport</b>", styles["Title"]),
+        Spacer(1, 4 * mm),
+    ]
+    story.append(Paragraph("<b>Batch</b>", styles["h2"]))
+    story.append(Paragraph(f"Batch-id: {_escape(job.get('id', ''))}", body))
+    story.append(Paragraph(f"Aangemaakt: {_escape(job.get('created_at', ''))}", body))
+    if job.get("finished_at"):
+        story.append(Paragraph(f"Voltooid: {_escape(job['finished_at'])}", body))
+    story.append(Paragraph(f"Status: {_escape(job.get('status', ''))}", body))
+    story.append(Paragraph(f"Regels: {job.get('total', 0)} | verwerkt: {job.get('progress', 0)}", body))
+    if job.get("error_text"):
+        story.append(Paragraph(f"Fout: {_escape(job['error_text'])}", body))
+    story.append(Spacer(1, 4 * mm))
+    story.append(Paragraph("<b>Dataversies</b>", styles["h2"]))
+    meta = meta or {}
+    story.append(Paragraph(f"EU-lijst generatie: {_escape(meta.get('generation_date', 'onbekend'))}", body))
+    if meta.get("last_modified"):
+        story.append(Paragraph(f"EU-lijst laatste wijziging: {_escape(meta['last_modified'])}", body))
+    story.append(Spacer(1, 4 * mm))
+    story.append(Paragraph("<b>Resultaten per regel</b>", styles["h2"]))
+    if not results:
+        story.append(Paragraph("Geen regels gevonden.", body))
+    for item in results:
+        row = item.get("row") or {}
+        matches = item.get("matches") or []
+        story.append(Paragraph(f"Regel {item.get('row_index', 0) + 1}: <b>{_escape(row.get('naam', ''))}</b>", styles["h2"]))
+        if not matches:
+            story.append(Paragraph("Geen overeenkomsten.", body))
+        for match in matches:
+            story.extend(_result_paragraphs(match, styles))
+        story.append(Spacer(1, 2 * mm))
+    story.append(Spacer(1, 6 * mm))
+    story.append(Paragraph(f"<i>{_DISCLAIMER}</i>", body))
+    doc.build(story)
+    return buffer.getvalue()
+
+
+def render_batch_csv(job: dict, results: list[dict]) -> str:
+    output = StringIO()
+    writer = csv.writer(output, delimiter=";", lineterminator="\r\n")
+    writer.writerow(["regel", "naam-invoer", *_EXPORT_HEADERS])
+    for item in results:
+        row = item.get("row") or {}
+        matches = item.get("matches") or []
+        input_name = row.get("naam", "")
+        for match in matches:
+            exported = _export_rows([match])[0]
+            writer.writerow([item.get("row_index", 0) + 1, input_name, *exported])
+        if not matches:
+            writer.writerow([item.get("row_index", 0) + 1, input_name])
+    return "\ufeff" + output.getvalue()

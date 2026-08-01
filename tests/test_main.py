@@ -12,6 +12,7 @@ def _isolate_env(monkeypatch, tmp_path):
     monkeypatch.setenv("EU_DATA_DIR", str(tmp_path / "eu"))
     monkeypatch.setenv(search_index.INDEX_ENV, "0")
     monkeypatch.setenv("AUDIT_DB", str(tmp_path / "audit.sqlite"))
+    monkeypatch.setenv("BATCH_DB", str(tmp_path / "batch.sqlite"))
     monkeypatch.delenv("AUDIT_ADMIN_TOKEN", raising=False)
 
 
@@ -868,3 +869,160 @@ def test_audit_endpoint_allows_admin_role(auth_env):
     resp = client.get("/api/audit")
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
+
+
+def _batch_csv(text: str) -> bytes:
+    return text.encode("utf-8")
+
+
+def _create_batch(client, text: str) -> str:
+    resp = client.post("/api/batch", files={"file": ("lijst.csv", _batch_csv(text), "text/csv")})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["batch_id"]
+
+
+def _wait_done(client, batch_id: str, timeout: float = 10.0) -> dict:
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = client.get(f"/api/batch/{batch_id}").json()
+        if data["status"] in ("done", "error"):
+            return data
+        time.sleep(0.05)
+    raise AssertionError(f"batch {batch_id} niet klaar binnen {timeout}s")
+
+
+def test_batch_upload_returns_batch_id(tmp_path, monkeypatch):
+    import uuid
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\n")
+    uuid.UUID(batch_id)
+
+
+def test_batch_processes_rows_and_reports_matches(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\nJohn Smith\nZzq Qqxx\n")
+    status = client.get(f"/api/batch/{batch_id}").json()
+    assert status["status"] in ("pending", "running", "done")
+    assert status["total"] == 3
+    data = _wait_done(client, batch_id)
+    assert data["status"] == "done"
+    assert data["progress"] == 3
+    assert data["finished_at"] is not None
+    by_name = {r["row"]["naam"]: r for r in data["rows"]}
+    jorge = by_name["JORGE FERNANDEZ"]
+    assert jorge["matches"] and jorge["matches"][0]["source"] == "pep"
+    john = by_name["John Smith"]
+    assert john["matches"] and john["matches"][0]["source"] == "eu"
+    assert by_name["Zzq Qqxx"]["matches"] == []
+
+
+def test_batch_unknown_job_returns_404():
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/batch/onbekend").status_code == 404
+
+
+def test_batch_row_limit_413(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    text = "naam\n" + "\n".join(f"persoon-{i}" for i in range(5001)) + "\n"
+    resp = client.post("/api/batch", files={"file": ("lijst.csv", _batch_csv(text), "text/csv")})
+    assert resp.status_code == 413
+
+
+def test_batch_empty_file_400(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.post("/api/batch", files={"file": ("lijst.csv", b"", "text/csv")})
+    assert resp.status_code == 400
+
+
+def test_batch_missing_name_column_400(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    resp = client.post("/api/batch", files={"file": ("lijst.csv", _batch_csv("geboortejaar\n1970\n"), "text/csv")})
+    assert resp.status_code == 400
+
+
+def test_batch_report_pdf(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\n")
+    _wait_done(client, batch_id)
+    resp = client.get(f"/api/batch/{batch_id}/report.pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert b".pdf" in resp.headers["content-disposition"].encode()
+    assert resp.content[:4] == b"%PDF"
+
+
+def test_batch_report_csv(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\n")
+    _wait_done(client, batch_id)
+    resp = client.get(f"/api/batch/{batch_id}/report.csv")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+    assert "attachment" in resp.headers["content-disposition"]
+    assert resp.content[:3] == b"\xef\xbb\xbf"
+    body = resp.content.decode("utf-8-sig")
+    assert "JORGE FERNÁNDEZ" in body
+
+
+def test_batch_report_not_done_or_unknown_404(tmp_path, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    monkeypatch.setattr(main.batch, "process_job", lambda *a, **k: None)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\n")
+    assert client.get(f"/api/batch/{batch_id}/report.pdf").status_code == 404
+    assert client.get(f"/api/batch/{batch_id}/report.csv").status_code == 404
+    assert client.get("/api/batch/onbekend/report.pdf").status_code == 404
+    assert client.get("/api/batch/onbekend/report.csv").status_code == 404
+
+
+def test_batch_creation_logs_audit(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\n")
+    event = _last_audit_events(tmp_path)[0]
+    assert event["method"] == "POST"
+    assert event["path"] == "/api/batch"
+    assert event["query"]["batch_id"] == batch_id
+    assert event["result_count"] == 1
+
+
+def test_batch_report_logs_audit(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\n")
+    _wait_done(client, batch_id)
+    client.get(f"/api/batch/{batch_id}/report.pdf")
+    events = _last_audit_events(tmp_path)
+    assert any(e["path"] == f"/api/batch/{batch_id}/report.pdf" for e in events)
+
+
+def test_gating_viewer_cannot_batch(monkeypatch, auth_env):
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    _create_local_user(role="viewer")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    resp = client.post("/api/batch", files={"file": ("lijst.csv", _batch_csv("naam\nJan\n"), "text/csv")})
+    assert resp.status_code == 403
