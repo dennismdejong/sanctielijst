@@ -36,6 +36,22 @@ Het PDF-rapport wordt gegenereerd met **reportlab**; CSV/XLSX met **openpyxl** �
 
 Elke zoekopdracht en export wordt gelogd (tijdstip, client-IP, query, aantal resultaten, bronnen) in `data/audit.sqlite` (env `AUDIT_DB`, gitignored). Beheer kan de log bekijken op `/audit`, beveiligd met `AUDIT_ADMIN_TOKEN` (Bearer-header; het endpoint is 404 zolang die env niet gezet is). Achter een reverse proxy: uvicorn met `--proxy-headers` zodat het echte client-IP wordt vastgelegd.
 
+## Batch-screening
+
+Upload een **CSV**- of **Excel** (`.xlsx`)-bestand met honderden namen in één keer: elke regel wordt met dezelfde scoring als de UI gescreend (drempel 90, max 20 matches). `POST /api/batch` (multipart `file`) retourneert een `batch_id`; de screening draait asynchroon op de achtergrond. `GET /api/batch/{id}` toont de voortgang en per regel de matches; `GET /api/batch/{id}/report.pdf` en `.../report.csv` leveren het overzichtsrapport.
+
+- Kolommen: `naam` (verplicht), optioneel `geboortejaar`, `nationaliteit`, `geboorteplaats`, `type` (`person`/`enterprise`). De header-rij is hoofdlettergevoelig niet (`Naam`/`naam`/`NAME`).
+- Max **5.000** regels per batch (413 bij overschrijding, uploads > 50 MB worden geweigerd); regels zonder naam zijn per-regel validatiefouten, geen afwijzing van de hele batch.
+- Batch-aanmaak en rapport-downloads worden vastgelegd in de audit-log. Jobs staan in `data/batch.sqlite` (env `BATCH_DB`).
+
+## Watchlists
+
+Bewaken van namen (need-to-know): je bewaart een naam in de browser en de app meldt zodra een data-update nieuwe matches oplevert — **zonder dat de bewaakte naam ooit op de server wordt opgeslagen**. De server kent alleen een anonieme watch-ID (via de `watch_key`-cookie) en de publieke match-data.
+
+- Knop **"Bewaak deze naam"** naast de zoekknop; de naam + criteria blijven in `localStorage` van de browser.
+- De client polt `/api/status` (`data_version`) en her-screent bij elke data-wijziging; nieuwe hits verschijnen als badge + melding.
+- Endpoints: `POST`/`GET`/`DELETE /api/watchlists`, `POST /api/watchlists/{id}/rescan`, `GET /api/watchlists/hits`.
+
 ## OpenSanctions (optioneel)
 
 Naast de lokale EU-lijst en de gedownloade PEP-data kun je met een API-key extra screening doen via de OpenSanctions `/match`-API. Die draait op sanctie-topics (OFAC, VN, VK, etc.) — PEP-resultaten komen uit de lokaal gedownloade data, niet uit deze API. De key is gratis voor niet-commercieel gebruik via https://www.opensanctions.org/account/ (voor commercieel gebruik geldt een licentie):

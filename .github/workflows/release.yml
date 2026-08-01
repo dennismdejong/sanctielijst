@@ -1,0 +1,38 @@
+name: Publiceren GitHub Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Haal changelog-sectie voor deze versie op
+        shell: bash
+        run: |
+          cat > /tmp/changelog-extract.py <<'PYEOF'
+          import re, sys
+          version = sys.argv[1]
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(rf"## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## \[|\Z)", text, re.S)
+          if not match:
+              sys.exit(f"Geen changelog-sectie voor {version} gevonden in CHANGELOG.md")
+          print(match.group(1).strip() + "\n")
+          PYEOF
+          /usr/bin/python3 /tmp/changelog-extract.py "${{ github.ref_name }}" > release-body.md
+
+      - name: Maak GitHub Release aan
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release-body.md
+          draft: false
+          prerelease: false
