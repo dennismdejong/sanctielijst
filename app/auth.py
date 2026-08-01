@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import bcrypt
-from itsdangerous import BadSignature, SignatureExpired, TimedSerializer
+from authlib.integrations.httpx_client import AsyncOAuth2Client
+from itsdangerous import BadSignature, SignatureExpired, TimedSerializer, URLSafeTimedSerializer
 
 ROLES = ("admin", "analist", "viewer")
 SESSION_MAX_AGE = 43200
+ENTRA_STATE_MAX_AGE = 600
+ENTRA_DISCOVERY_PATH = "/.well-known/openid-configuration"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -110,7 +113,11 @@ def find_by_credentials(db_path: Path, username: str, password: str) -> dict | N
 
 
 def find_or_create_idp_user(
-    db_path: Path, idp: str, idp_subject: str, default_role: str = "viewer"
+    db_path: Path,
+    idp: str,
+    idp_subject: str,
+    default_role: str = "viewer",
+    username: str | None = None,
 ) -> dict:
     init_auth_db(db_path)
     with _open(db_path) as conn:
@@ -122,7 +129,7 @@ def find_or_create_idp_user(
         return _row_to_user(row)
     return create_user(
         db_path,
-        username=idp_subject,
+        username=username or idp_subject,
         role=default_role,
         idp=idp,
         idp_subject=idp_subject,
@@ -158,3 +165,115 @@ def current_user(request, db_path: Path, secret: str) -> dict | None:
     if row is None:
         return None
     return {"user_id": row["id"], "username": row["username"], "role": row["role"]}
+
+
+def entra_config() -> dict | None:
+    if os.environ.get("AUTH_ENTRA_ENABLED", "0") not in ("1", "true", "True", "yes"):
+        return None
+    tenant = os.environ.get("AUTH_ENTRA_TENANT")
+    client_id = os.environ.get("AUTH_ENTRA_CLIENT_ID")
+    client_secret = os.environ.get("AUTH_ENTRA_CLIENT_SECRET")
+    redirect_uri = os.environ.get("AUTH_ENTRA_REDIRECT_URI")
+    if not (tenant and client_id and client_secret and redirect_uri):
+        raise ValueError(
+            "AUTH_ENTRA_ENABLED=1 vereist AUTH_ENTRA_TENANT, AUTH_ENTRA_CLIENT_ID, "
+            "AUTH_ENTRA_CLIENT_SECRET en AUTH_ENTRA_REDIRECT_URI"
+        )
+    issuer = f"https://login.microsoftonline.com/{tenant}/v2.0"
+    return {
+        "issuer": issuer,
+        "discovery_url": f"{issuer}{ENTRA_DISCOVERY_PATH}",
+        "tenant": tenant,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "scope": os.environ.get("AUTH_ENTRA_SCOPE") or "openid profile email",
+        "default_role": os.environ.get("AUTH_ENTRA_DEFAULT_ROLE") or "viewer",
+    }
+
+
+def entra_client(config: dict, **kwargs) -> AsyncOAuth2Client:
+    return AsyncOAuth2Client(
+        client_id=config["client_id"],
+        client_secret=config["client_secret"],
+        redirect_uri=config["redirect_uri"],
+        scope=config["scope"],
+        code_challenge_method="S256",
+        discovery_url=config["discovery_url"],
+        **kwargs,
+    )
+
+
+async def _discover(client: AsyncOAuth2Client) -> dict:
+    discovery_url = client.metadata.get("discovery_url")
+    if not discovery_url:
+        raise ValueError("geen discovery_url in client-config")
+    resp = await client.request("GET", discovery_url, withhold_token=True)
+    resp.raise_for_status()
+    data = resp.json()
+    client.metadata["authorization_endpoint"] = data["authorization_endpoint"]
+    client.metadata["token_endpoint"] = data["token_endpoint"]
+    client.metadata["userinfo_endpoint"] = data["userinfo_endpoint"]
+    return client.metadata
+
+
+def _sign_state(secret: str, value: str) -> str:
+    return URLSafeTimedSerializer(secret).dumps(value)
+
+
+def _verify_state(state: str, secret: str, max_age: int = ENTRA_STATE_MAX_AGE) -> str:
+    serializer = URLSafeTimedSerializer(secret)
+    try:
+        return serializer.loads(state, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        raise ValueError("ongeldige of verlopen state")
+
+
+async def entra_authorize_url(
+    client: AsyncOAuth2Client, state_secret: str | None = None
+) -> tuple[str, str, str]:
+    state_secret = state_secret or os.environ.get("AUTH_SECRET")
+    if not state_secret:
+        raise ValueError("AUTH_SECRET is vereist voor de state")
+    metadata = await _discover(client)
+    code_verifier = secrets.token_urlsafe(32)
+    state = _sign_state(state_secret, secrets.token_urlsafe(16))
+    url, _ = client.create_authorization_url(
+        metadata["authorization_endpoint"],
+        state=state,
+        code_verifier=code_verifier,
+    )
+    return url, code_verifier, state
+
+
+async def entra_exchange(
+    client: AsyncOAuth2Client,
+    code: str,
+    code_verifier: str,
+    state: str,
+    state_secret: str,
+) -> dict:
+    _verify_state(state, state_secret)
+    metadata = await _discover(client)
+    token = await client.fetch_token(
+        metadata["token_endpoint"],
+        grant_type="authorization_code",
+        code=code,
+        code_verifier=code_verifier,
+    )
+    resp = await client.request(
+        "GET",
+        metadata["userinfo_endpoint"],
+        headers={"Authorization": f"Bearer {token['access_token']}"},
+        withhold_token=True,
+    )
+    resp.raise_for_status()
+    userinfo = resp.json()
+    preferred_username = userinfo.get("preferred_username")
+    email = userinfo.get("email")
+    return {
+        "sub": userinfo["sub"],
+        "preferred_username": preferred_username,
+        "email": email,
+        "username": preferred_username or email or userinfo["sub"],
+    }

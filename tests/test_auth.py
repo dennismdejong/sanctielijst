@@ -1,7 +1,10 @@
 import sqlite3
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
+from authlib.oauth2.rfc7636 import create_s256_code_challenge
 from starlette.requests import Request
 
 from app import auth
@@ -224,3 +227,154 @@ def test_current_user_unknown_user_id(db_path):
     token = auth.create_session({"id": "bestaat-niet", "role": "admin"}, "geheim")
     request = make_request({"session": token})
     assert auth.current_user(request, db_path, "geheim") is None
+
+
+ENTRA_DISCOVERY = {
+    "issuer": "https://login.microsoftonline.com/tenant-test/v2.0",
+    "authorization_endpoint": "https://login.microsoftonline.com/tenant-test/oauth2/v2.0/authorize",
+    "token_endpoint": "https://login.microsoftonline.com/tenant-test/oauth2/v2.0/token",
+    "userinfo_endpoint": "https://login.microsoftonline.com/tenant-test/oauth2/v2.0/userinfo",
+}
+
+
+def set_entra_env(monkeypatch, **overrides):
+    env = {
+        "AUTH_ENTRA_ENABLED": "1",
+        "AUTH_ENTRA_TENANT": "tenant-test",
+        "AUTH_ENTRA_CLIENT_ID": "client-1",
+        "AUTH_ENTRA_CLIENT_SECRET": "secret-1",
+        "AUTH_ENTRA_REDIRECT_URI": "https://app.example/callback",
+    }
+    env.update(overrides)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+def make_entra_transport(userinfo=None):
+    def handler(request):
+        path = request.url.path
+        if path.endswith("/.well-known/openid-configuration"):
+            return httpx.Response(200, json=ENTRA_DISCOVERY)
+        if path.endswith("/token"):
+            return httpx.Response(
+                200,
+                json={"access_token": "at-mock", "token_type": "Bearer", "expires_in": 3600},
+            )
+        if path.endswith("/userinfo"):
+            return httpx.Response(
+                200,
+                json=userinfo
+                or {
+                    "sub": "sub-123",
+                    "preferred_username": "bob@example.com",
+                    "email": "bob@example.com",
+                },
+            )
+        return httpx.Response(404, text="not found")
+
+    return httpx.MockTransport(handler)
+
+
+async def run_exchange(monkeypatch, userinfo):
+    set_entra_env(monkeypatch)
+    config = auth.entra_config()
+    client = auth.entra_client(config, transport=make_entra_transport(userinfo))
+    _, code_verifier, state = await auth.entra_authorize_url(client, state_secret="geheim")
+    return await auth.entra_exchange(client, "code-123", code_verifier, state, "geheim")
+
+
+def make_entra_client(monkeypatch):
+    set_entra_env(monkeypatch)
+    config = auth.entra_config()
+    client = auth.entra_client(config, transport=make_entra_transport())
+    return client, config
+
+
+def test_entra_config_disabled(monkeypatch):
+    monkeypatch.delenv("AUTH_ENTRA_ENABLED", raising=False)
+    assert auth.entra_config() is None
+
+
+def test_entra_config_enabled(monkeypatch):
+    set_entra_env(monkeypatch)
+    config = auth.entra_config()
+    assert config["issuer"] == "https://login.microsoftonline.com/tenant-test/v2.0"
+    assert config["discovery_url"].endswith("/.well-known/openid-configuration")
+    assert config["client_id"] == "client-1"
+    assert config["scope"] == "openid profile email"
+    assert config["default_role"] == "viewer"
+
+
+def test_entra_config_custom_scope_and_role(monkeypatch):
+    set_entra_env(
+        monkeypatch, AUTH_ENTRA_SCOPE="openid", AUTH_ENTRA_DEFAULT_ROLE="analist"
+    )
+    config = auth.entra_config()
+    assert config["scope"] == "openid"
+    assert config["default_role"] == "analist"
+
+
+@pytest.mark.parametrize("missing", ["AUTH_ENTRA_TENANT", "AUTH_ENTRA_CLIENT_ID", "AUTH_ENTRA_CLIENT_SECRET", "AUTH_ENTRA_REDIRECT_URI"])
+def test_entra_config_missing_required_raises(monkeypatch, missing):
+    set_entra_env(monkeypatch, **{missing: ""})
+    with pytest.raises(ValueError):
+        auth.entra_config()
+
+
+@pytest.mark.anyio
+async def test_entra_authorize_url_pkce(monkeypatch):
+    client, _ = make_entra_client(monkeypatch)
+    url, code_verifier, state = await auth.entra_authorize_url(client, state_secret="geheim")
+    params = parse_qs(urlparse(url).query)
+    assert params["response_type"] == ["code"]
+    assert params["client_id"] == ["client-1"]
+    assert params["redirect_uri"] == ["https://app.example/callback"]
+    assert params["code_challenge_method"] == ["S256"]
+    assert params["code_challenge"] == [create_s256_code_challenge(code_verifier)]
+    assert params["state"] == [state]
+    assert code_verifier
+
+
+@pytest.mark.anyio
+async def test_entra_exchange_returns_mapped_user(monkeypatch, db_path):
+    client, _ = make_entra_client(monkeypatch)
+    _, code_verifier, state = await auth.entra_authorize_url(client, state_secret="geheim")
+    userinfo = await auth.entra_exchange(client, "code-123", code_verifier, state, "geheim")
+    assert userinfo == {
+        "sub": "sub-123",
+        "preferred_username": "bob@example.com",
+        "email": "bob@example.com",
+        "username": "bob@example.com",
+    }
+    user = auth.find_or_create_idp_user(
+        db_path, "entra", userinfo["sub"], username=userinfo["username"]
+    )
+    assert user["username"] == "bob@example.com"
+    assert user["idp_subject"] == "sub-123"
+
+
+@pytest.mark.anyio
+async def test_entra_exchange_username_fallbacks(monkeypatch):
+    result = await run_exchange(monkeypatch, {"sub": "sub-x", "email": "x@example.com"})
+    assert result["username"] == "x@example.com"
+    assert result["preferred_username"] is None
+    result = await run_exchange(monkeypatch, {"sub": "sub-y"})
+    assert result["username"] == "sub-y"
+
+
+@pytest.mark.anyio
+async def test_entra_exchange_invalid_state(monkeypatch):
+    client, _ = make_entra_client(monkeypatch)
+    with pytest.raises(ValueError):
+        await auth.entra_exchange(client, "code-123", "verifier", "onzin-state", "geheim")
+
+
+@pytest.mark.anyio
+async def test_entra_exchange_expired_state(monkeypatch):
+    client, _ = make_entra_client(monkeypatch)
+    clock = Clock(1_000_000.0)
+    monkeypatch.setattr("time.time", clock)
+    _, code_verifier, state = await auth.entra_authorize_url(client, state_secret="geheim")
+    clock.now += auth.ENTRA_STATE_MAX_AGE + 1
+    with pytest.raises(ValueError):
+        await auth.entra_exchange(client, "code-123", code_verifier, state, "geheim")
