@@ -8,11 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import audit
+from . import auth
 from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_ingest
 from . import search_index
@@ -261,8 +263,43 @@ def create_app(
             state["index_status"] = "building"
             threading.Thread(target=_build_index, args=(state, db_path, eu_xml, pep_root), daemon=True).start()
     opensanctions_active = bool(os_api_key)
+    auth_secret = os.environ.get("AUTH_SECRET")
+    auth_db = auth.default_auth_db()
+    auth_required = os.environ.get("AUTH_REQUIRED", "0").strip().lower() in ("1", "true", "yes")
+    local_enabled = os.environ.get("AUTH_LOCAL_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+    if auth_required and not auth_secret:
+        raise RuntimeError("AUTH_REQUIRED=1 vereist AUTH_SECRET in de omgeving")
+    try:
+        entra_config = auth.entra_config()
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if entra_config is not None and not auth_secret:
+        raise RuntimeError("Entra-login vereist AUTH_SECRET in de omgeving")
 
     app = FastAPI(title="Compliance Zoeker")
+
+    def get_current_user(request: Request) -> dict | None:
+        if auth_secret is None:
+            return None
+        return auth.current_user(request, auth_db, auth_secret)
+
+    def require_role(*roles):
+        def dependency(user: dict | None = Depends(get_current_user)) -> dict:
+            if user is None:
+                raise HTTPException(status_code=401, detail="Niet ingelogd")
+            if user["role"] not in roles:
+                raise HTTPException(status_code=403, detail="Onvoldoende rechten")
+            return user
+
+        return dependency
+
+    def _check_roles(user: dict | None, roles: tuple[str, ...]) -> None:
+        if not auth_required:
+            return
+        if user is None:
+            raise HTTPException(status_code=401, detail="Niet ingelogd")
+        if user["role"] not in roles:
+            raise HTTPException(status_code=403, detail="Onvoldoende rechten")
 
     @app.get("/")
     def index():
@@ -375,22 +412,122 @@ def create_app(
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
         authorization: str | None = Header(None),
+        user: dict | None = Depends(get_current_user),
     ):
-        if not audit_admin_token:
+        admin_session = user is not None and user["role"] == "admin"
+        if not audit_admin_token and not admin_session:
             raise HTTPException(status_code=404, detail="Audit-endpoint uitgeschakeld")
-        if not secrets.compare_digest(authorization or "", f"Bearer {audit_admin_token}"):
+        valid_token = bool(audit_admin_token) and secrets.compare_digest(authorization or "", f"Bearer {audit_admin_token}")
+        if not (admin_session or valid_token):
             raise HTTPException(status_code=401, detail="Niet geautoriseerd")
         return {"events": audit.list_events(audit_db, limit=limit, offset=offset), "total": audit.count_events(audit_db)}
+
+    @app.get("/api/auth/login")
+    async def auth_login(request: Request):
+        if entra_config is not None:
+            client = auth.entra_client(entra_config)
+            url, code_verifier, state = await auth.entra_authorize_url(client, state_secret=auth_secret)
+            response = RedirectResponse(url)
+            response.set_cookie("auth_code_verifier", code_verifier, httponly=True, samesite="lax", secure=request.url.scheme == "https", path="/")
+            return response
+        methods = ["local"] if local_enabled else []
+        return {"methods": methods}
+
+    @app.post("/api/auth/login")
+    async def auth_login_local(request: Request, payload: dict | None = Body(default=None)):
+        if not local_enabled:
+            raise HTTPException(status_code=404, detail="Lokale login uitgeschakeld")
+        if auth_secret is None:
+            raise HTTPException(status_code=503, detail="AUTH_SECRET niet geconfigureerd")
+        username = (payload or {}).get("username")
+        password = (payload or {}).get("password")
+        if not username or not password:
+            raise HTTPException(status_code=401, detail="Ongeldige gebruikersnaam of wachtwoord")
+        user = auth.find_by_credentials(auth_db, username, password)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Ongeldige gebruikersnaam of wachtwoord")
+        token = auth.create_session(user, auth_secret)
+        response = JSONResponse({"username": user["username"], "role": user["role"]})
+        response.set_cookie("session", token, httponly=True, samesite="lax", secure=request.url.scheme == "https", path="/", max_age=auth.SESSION_MAX_AGE)
+        return response
+
+    @app.get("/api/auth/callback")
+    async def auth_callback(
+        request: Request,
+        code: str = Query(...),
+        state: str | None = Query(None),
+        error: str | None = Query(None),
+    ):
+        if entra_config is None:
+            raise HTTPException(status_code=400, detail="Entra-login niet geconfigureerd")
+        if error:
+            raise HTTPException(status_code=400, detail="Entra-login mislukt")
+        code_verifier = request.cookies.get("auth_code_verifier")
+        if not code_verifier:
+            raise HTTPException(status_code=400, detail="Geen geldige login-sessie")
+        try:
+            client = auth.entra_client(entra_config)
+            info = await auth.entra_exchange(client, code, code_verifier, state, auth_secret)
+        except Exception:
+            logger.warning("Entra-exchange mislukt", exc_info=True)
+            raise HTTPException(status_code=400, detail="Entra-login mislukt")
+        user = auth.find_or_create_idp_user(
+            auth_db,
+            "entra",
+            info["sub"],
+            default_role=entra_config["default_role"],
+            username=info.get("username"),
+        )
+        token = auth.create_session(user, auth_secret)
+        response = RedirectResponse("/", status_code=303)
+        response.delete_cookie("auth_code_verifier", path="/")
+        response.set_cookie("session", token, httponly=True, samesite="lax", secure=request.url.scheme == "https", path="/", max_age=auth.SESSION_MAX_AGE)
+        return response
+
+    @app.post("/api/auth/logout")
+    def auth_logout():
+        response = Response(status_code=204)
+        response.delete_cookie("session", path="/")
+        return response
+
+    @app.get("/api/auth/me")
+    def auth_me(user: dict | None = Depends(get_current_user)):
+        if user is None:
+            raise HTTPException(status_code=401, detail="Niet ingelogd")
+        return {"username": user["username"], "role": user["role"]}
+
+    class CreateUserBody(BaseModel):
+        username: str
+        password: str | None = None
+        role: str = "viewer"
+        idp_subject: str | None = None
+
+    @app.post("/api/auth/users")
+    def auth_create_user(body: CreateUserBody, user: dict = Depends(require_role("admin"))):
+        try:
+            created = auth.create_user(
+                auth_db,
+                body.username,
+                password=body.password,
+                role=body.role,
+                idp="entra" if body.idp_subject else None,
+                idp_subject=body.idp_subject,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"id": created["id"], "username": created["username"], "role": created["role"]}
 
     @app.get("/api/search")
     def search(
         request: Request,
+        user: dict | None = Depends(get_current_user),
         name: str = Query(..., min_length=1),
         birth_year: int | None = Query(None, ge=1900, le=2100),
         nationality: str | None = None,
         birth_place: str | None = None,
         entity_type: str | None = Query(None, pattern="^(person|enterprise)$"),
     ):
+        _check_roles(user, ("admin", "analist", "viewer"))
         query = matcher.SearchQuery(
             name=name.strip(),
             birth_year=birth_year,
@@ -398,11 +535,12 @@ def create_app(
             birth_place=(birth_place or "").strip() or None,
             entity_type=entity_type,
         )
+        audit_user = user["username"] if user else None
         if not query.name:
-            _log_search(request, query, [], [])
+            _log_search(request, query, [], [], user=audit_user)
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
-        _log_search(request, query, results, warnings)
+        _log_search(request, query, results, warnings, user=audit_user)
         return {
             "query": {
                 "name": query.name,
@@ -419,6 +557,7 @@ def create_app(
     @app.get("/api/search/export")
     def search_export(
         request: Request,
+        user: dict | None = Depends(get_current_user),
         name: str = Query(..., min_length=1),
         birth_year: int | None = Query(None, ge=1900, le=2100),
         nationality: str | None = None,
@@ -427,12 +566,14 @@ def create_app(
         author: str | None = None,
         format: str = Query("pdf", pattern="^(pdf|csv|xlsx)$"),
     ):
+        _check_roles(user, ("admin", "analist", "viewer"))
         query = matcher.SearchQuery(name=name.strip(), birth_year=birth_year, nationality=(nationality or "").strip() or None, birth_place=(birth_place or "").strip() or None, entity_type=entity_type)
+        audit_user = user["username"] if user else None
         if not query.name:
-            _log_search(request, query, [], [])
+            _log_search(request, query, [], [], user=audit_user)
             raise HTTPException(status_code=422, detail="Naam is verplicht")
         results, warnings = run_search(query)
-        _log_search(request, query, results, warnings)
+        _log_search(request, query, results, warnings, user=audit_user)
         now = datetime.now().astimezone()
         generated = now.strftime("%Y-%m-%d %H:%M %Z")
         payload = {

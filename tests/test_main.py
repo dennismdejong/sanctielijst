@@ -599,3 +599,244 @@ def test_audit_failure_does_not_break_search(monkeypatch):
     resp = client.get("/api/search", params={"name": "Abdul Hai Hazem"})
     assert resp.status_code == 200
     assert resp.json()["results"]
+
+
+@pytest.fixture
+def auth_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("AUTH_SECRET", "test-secret")
+    monkeypatch.setenv("AUTH_DB", str(tmp_path / "auth.sqlite"))
+
+
+def _create_local_user(username="alice", password="geheim", role="admin"):
+    from app import auth
+
+    return auth.create_user(auth.default_auth_db(), username=username, password=password, role=role)
+
+
+def _set_entra_env(monkeypatch, **overrides):
+    env = {
+        "AUTH_ENTRA_ENABLED": "1",
+        "AUTH_ENTRA_TENANT": "tenant-test",
+        "AUTH_ENTRA_CLIENT_ID": "client-1",
+        "AUTH_ENTRA_CLIENT_SECRET": "secret-1",
+        "AUTH_ENTRA_REDIRECT_URI": "https://app.example/callback",
+    }
+    env.update(overrides)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+
+def test_auth_login_get_returns_local_methods():
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/auth/login")
+    assert resp.status_code == 200
+    assert resp.json() == {"methods": ["local"]}
+
+
+def test_auth_login_local_sets_cookie_and_me(auth_env):
+    _create_local_user()
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    assert resp.status_code == 200
+    assert resp.json() == {"username": "alice", "role": "admin"}
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "session=" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Path=/" in set_cookie
+    assert "Secure" not in set_cookie
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json() == {"username": "alice", "role": "admin"}
+
+
+def test_auth_login_local_bad_credentials_401(auth_env):
+    _create_local_user()
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.post("/api/auth/login", json={"username": "alice", "password": "fout"}).status_code == 401
+    assert client.post("/api/auth/login", json={"username": "onbekend", "password": "geheim"}).status_code == 401
+    assert client.post("/api/auth/login", json={}).status_code == 401
+
+
+def test_auth_logout_clears_cookie(auth_env):
+    _create_local_user()
+    client = TestClient(create_app(entities=ENTITIES))
+    client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    assert client.get("/api/auth/me").status_code == 200
+    resp = client.post("/api/auth/logout")
+    assert resp.status_code == 204
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_auth_me_401_when_anonymous():
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_auth_login_entra_redirects(monkeypatch, auth_env):
+    import app.main as main
+
+    _set_entra_env(monkeypatch)
+    fake_url = "https://login.microsoftonline.com/tenant-test/oauth2/v2.0/authorize?x=1"
+
+    async def fake_authorize(*a, **k):
+        return (fake_url, "verifier", "state-1")
+
+    monkeypatch.setattr(main.auth, "entra_authorize_url", fake_authorize)
+    client = TestClient(create_app(entities=ENTITIES), follow_redirects=False)
+    resp = client.get("/api/auth/login")
+    assert resp.status_code == 307
+    assert resp.headers["location"] == fake_url
+    assert "auth_code_verifier=verifier" in resp.headers.get("set-cookie", "")
+
+
+def test_auth_callback_entra_success(monkeypatch, auth_env):
+    import app.main as main
+
+    _set_entra_env(monkeypatch)
+    userinfo = {"sub": "sub-123", "username": "bob@example.com", "preferred_username": "bob@example.com", "email": "bob@example.com"}
+
+    async def fake_exchange(client, code, code_verifier, state, state_secret):
+        return userinfo
+
+    monkeypatch.setattr(main.auth, "entra_exchange", fake_exchange)
+    client = TestClient(create_app(entities=ENTITIES), follow_redirects=False)
+    client.cookies.set("auth_code_verifier", "verifier")
+    resp = client.get("/api/auth/callback", params={"code": "code-1", "state": "state-1"})
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/"
+    me = client.get("/api/auth/me")
+    assert me.status_code == 200
+    assert me.json() == {"username": "bob@example.com", "role": "viewer"}
+
+
+def test_auth_callback_invalid_state_400(monkeypatch, auth_env):
+    import app.main as main
+
+    _set_entra_env(monkeypatch)
+
+    async def fake_exchange(client, code, code_verifier, state, state_secret):
+        raise ValueError("ongeldige of verlopen state")
+
+    monkeypatch.setattr(main.auth, "entra_exchange", fake_exchange)
+    client = TestClient(create_app(entities=ENTITIES))
+    client.cookies.set("auth_code_verifier", "verifier")
+    resp = client.get("/api/auth/callback", params={"code": "code-1", "state": "onzin"})
+    assert resp.status_code == 400
+
+
+def test_auth_callback_missing_code_verifier_400(monkeypatch, auth_env):
+    import app.main as main
+
+    _set_entra_env(monkeypatch)
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/auth/callback", params={"code": "code-1", "state": "state-1"})
+    assert resp.status_code == 400
+
+
+def test_auth_callback_entra_disabled_400():
+    client = TestClient(create_app(entities=ENTITIES))
+    resp = client.get("/api/auth/callback", params={"code": "code-1", "state": "state-1"})
+    assert resp.status_code == 400
+
+
+def test_startup_raises_when_required_without_secret(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    monkeypatch.delenv("AUTH_SECRET", raising=False)
+    with pytest.raises(RuntimeError):
+        create_app(entities=ENTITIES)
+
+
+def test_startup_raises_when_entra_config_incomplete(monkeypatch, auth_env):
+    _set_entra_env(monkeypatch, AUTH_ENTRA_CLIENT_SECRET="")
+    with pytest.raises(RuntimeError):
+        create_app(entities=ENTITIES)
+
+
+def test_startup_raises_when_entra_enabled_without_secret(monkeypatch):
+    _set_entra_env(monkeypatch)
+    monkeypatch.delenv("AUTH_SECRET", raising=False)
+    with pytest.raises(RuntimeError):
+        create_app(entities=ENTITIES)
+
+
+def test_gating_requires_login_when_required(monkeypatch, auth_env):
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/search", params={"name": "Abdul"}).status_code == 401
+    assert client.get("/api/search/export", params={"name": "Abdul"}).status_code == 401
+
+
+def test_gating_allows_authenticated_user(monkeypatch, auth_env):
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    _create_local_user(role="analist")
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.post("/api/auth/login", json={"username": "alice", "password": "geheim"}).status_code == 200
+    assert client.get("/api/search", params={"name": "Abdul Hai Hazem"}).status_code == 200
+    assert client.get("/api/search/export", params={"name": "Zzq Qqxx"}).status_code == 200
+
+
+def test_gating_open_when_not_required(auth_env):
+    _create_local_user()
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/search", params={"name": "Abdul Hai Hazem"}).status_code == 200
+
+
+def test_users_endpoint_requires_admin(auth_env):
+    _create_local_user(username="admin", role="admin")
+    _create_local_user(username="analist", role="analist")
+    client = TestClient(create_app(entities=ENTITIES))
+    payload = {"username": "newbie", "password": "x", "role": "viewer"}
+    assert client.post("/api/auth/users", json=payload).status_code == 401
+    client.post("/api/auth/login", json={"username": "analist", "password": "geheim"})
+    assert client.post("/api/auth/users", json=payload).status_code == 403
+    client.post("/api/auth/login", json={"username": "admin", "password": "geheim"})
+    resp = client.post("/api/auth/users", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["username"] == "newbie"
+    assert resp.json()["role"] == "viewer"
+
+
+def test_users_endpoint_creates_entra_user(auth_env):
+    _create_local_user(role="admin")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    resp = client.post("/api/auth/users", json={"username": "bob@example.com", "role": "analist", "idp_subject": "sub-1"})
+    assert resp.status_code == 200
+    assert resp.json()["username"] == "bob@example.com"
+    assert resp.json()["role"] == "analist"
+
+
+def test_users_endpoint_duplicate_400(auth_env):
+    _create_local_user(role="admin")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    payload = {"username": "newbie", "password": "x", "role": "viewer"}
+    assert client.post("/api/auth/users", json=payload).status_code == 200
+    assert client.post("/api/auth/users", json=payload).status_code == 400
+
+
+def test_audit_event_user_filled_when_logged_in(auth_env, tmp_path):
+    _create_local_user(role="analist")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    event = _last_audit_events(tmp_path)[0]
+    assert event["user"] == "alice"
+
+
+def test_audit_event_user_none_when_anonymous(tmp_path):
+    client = TestClient(create_app(entities=ENTITIES))
+    client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    event = _last_audit_events(tmp_path)[0]
+    assert event["user"] is None
+
+
+def test_audit_endpoint_allows_admin_role(auth_env):
+    _create_local_user(role="admin")
+    client = TestClient(create_app(entities=ENTITIES))
+    client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
+    client.get("/api/search", params={"name": "Abdul Hai Hazem"})
+    resp = client.get("/api/audit")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 1
