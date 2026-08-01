@@ -7,3 +7,6 @@ pytest==9.1.1
 httpx==0.28.1
 reportlab==5.0.0
 openpyxl==3.1.5
+bcrypt==5.0.0
+itsdangerous==2.2.0
+authlib==1.7.2
