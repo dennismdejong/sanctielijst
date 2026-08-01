@@ -725,6 +725,24 @@ def test_auth_callback_invalid_state_400(monkeypatch, auth_env):
     assert resp.status_code == 400
 
 
+def test_auth_callback_local_username_collision_400(monkeypatch, auth_env):
+    import app.main as main
+
+    _set_entra_env(monkeypatch)
+    _create_local_user(username="bob@example.com", role="viewer")
+    userinfo = {"sub": "sub-bob", "username": "bob@example.com", "preferred_username": "bob@example.com", "email": "bob@example.com"}
+
+    async def fake_exchange(client, code, code_verifier, state, state_secret):
+        return userinfo
+
+    monkeypatch.setattr(main.auth, "entra_exchange", fake_exchange)
+    client = TestClient(create_app(entities=ENTITIES))
+    client.cookies.set("auth_code_verifier", "verifier")
+    resp = client.get("/api/auth/callback", params={"code": "code-1", "state": "state-1"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Gebruiker bestaat al"
+
+
 def test_auth_callback_missing_code_verifier_400(monkeypatch, auth_env):
     import app.main as main
 
@@ -774,6 +792,16 @@ def test_gating_allows_authenticated_user(monkeypatch, auth_env):
     assert client.post("/api/auth/login", json={"username": "alice", "password": "geheim"}).status_code == 200
     assert client.get("/api/search", params={"name": "Abdul Hai Hazem"}).status_code == 200
     assert client.get("/api/search/export", params={"name": "Zzq Qqxx"}).status_code == 200
+
+
+def test_gating_viewer_cannot_export(monkeypatch, auth_env):
+    monkeypatch.setenv("AUTH_REQUIRED", "1")
+    _create_local_user(role="viewer")
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.post("/api/auth/login", json={"username": "alice", "password": "geheim"}).status_code == 200
+    assert client.get("/api/search", params={"name": "Abdul Hai Hazem"}).status_code == 200
+    assert client.get("/api/search/export", params={"name": "Abdul Hai Hazem"}).status_code == 403
+    assert client.get("/api/search/export", params={"name": "Abdul Hai Hazem", "format": "csv"}).status_code == 403
 
 
 def test_gating_open_when_not_required(auth_env):

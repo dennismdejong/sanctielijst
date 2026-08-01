@@ -151,6 +151,30 @@ def test_render_eu_result_fields():
     assert b"Opmerking test" in decoded
 
 
+def test_render_eu_result_with_int_year_birthdate():
+    payload = _payload(results=[{
+        "source": "eu",
+        "score": 92,
+        "entity": {
+            "name": "ALIAS BV",
+            "eu_reference_number": "EU.123",
+            "united_nations_id": "",
+            "aliases": [],
+            "citizenships": [],
+            "birthdates": [{"date": "", "year": 1971, "place": "Kabul", "city": ""}],
+            "regulations": [],
+            "function": "",
+            "remarks": [],
+        },
+        "eu": {"matched_alias": "Alias One", "details": []},
+        "opensanctions": None,
+        "pep": None,
+    }])
+    data = render_search_pdf(payload)
+    assert data[:4] == b"%PDF"
+    assert b"1971 Kabul" in _decoded_text(data)
+
+
 def test_render_eu_result_with_empty_details():
     payload = _payload(results=[{
         "source": "eu",

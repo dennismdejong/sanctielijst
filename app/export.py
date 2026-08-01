@@ -54,7 +54,7 @@ def _result_paragraphs(result: dict, styles) -> list:
                 continue
             when = birth.get("date") or birth.get("year")
             where = birth.get("place") or birth.get("city")
-            value = " ".join(filter(None, [when, where]))
+            value = " ".join(str(part) for part in (when, where) if part)
             if value:
                 parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(value)}", styles["body"]))
         for country in raw.get("citizenships", []):

@@ -468,16 +468,21 @@ def create_app(
         try:
             client = auth.entra_client(entra_config)
             info = await auth.entra_exchange(client, code, code_verifier, state, auth_secret)
+            try:
+                user = auth.find_or_create_idp_user(
+                    auth_db,
+                    "entra",
+                    info["sub"],
+                    default_role=entra_config["default_role"],
+                    username=info.get("username"),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Gebruiker bestaat al") from exc
+        except HTTPException:
+            raise
         except Exception:
             logger.warning("Entra-exchange mislukt", exc_info=True)
             raise HTTPException(status_code=400, detail="Entra-login mislukt")
-        user = auth.find_or_create_idp_user(
-            auth_db,
-            "entra",
-            info["sub"],
-            default_role=entra_config["default_role"],
-            username=info.get("username"),
-        )
         token = auth.create_session(user, auth_secret)
         response = RedirectResponse("/", status_code=303)
         response.delete_cookie("auth_code_verifier", path="/")
@@ -566,7 +571,7 @@ def create_app(
         author: str | None = None,
         format: str = Query("pdf", pattern="^(pdf|csv|xlsx)$"),
     ):
-        _check_roles(user, ("admin", "analist", "viewer"))
+        _check_roles(user, ("admin", "analist"))
         query = matcher.SearchQuery(name=name.strip(), birth_year=birth_year, nationality=(nationality or "").strip() or None, birth_place=(birth_place or "").strip() or None, entity_type=entity_type)
         audit_user = user["username"] if user else None
         if not query.name:
