@@ -16,6 +16,8 @@ De app leest de EU sanctielijst (XML 1.1, ~25 MB) uit `data/eu/` (env `EU_DATA_D
 
 Daarnaast zoekt de app in `data/search.sqlite`, een SQLite+FTS5-zoekindex over de EU- én de OpenSanctions PEP-data (zie "Wekelijks bijwerken PEP-data"). Het pad is te overschrijven met de `SEARCH_DB`-env (of `SEARCH_DATA_DIR`); default is `data/search.sqlite`. In de container hoort dit bestand op een persistent volume te staan, zodat de index niet bij elke herstart opnieuw wordt opgebouwd. Zet `PEP_INDEX_ENABLED=0` in `.env` om PEP-zoeken uit te schakelen (default: aan zolang `data/pep/` bestaat); de EU-lijst wordt altijd geïndexeerd. `POST /api/refresh` haalt de PEP-data zelf niet op — draai daarvoor `scripts/update_pep.py --once` (refresh herbouwt wél de zoekindex met de al gedownloade PEP-data).
 
+De index-rebuild streamt de datasets **sequentieel per dataset** (EU eerst, daarna PEP): er wordt nooit een volledige dataset in het geheugen geladen, waardoor het piekgeheugen laag en gebonden blijft. In de container draait de rebuild in een **apart subproces** (`PEP_INDEX_SUBPROCESS=1`), zodat een OOM of crash alleen de builder treft en niet de app. Zodra `data/pep/` of `data/eu/` verandert, herbouwt de app de index **automatisch** op de achtergrond — een restart is niet nodig.
+
 ## Starten
 
 ```bash
@@ -130,7 +132,7 @@ Download alle individuele PEP-bronnen (~0.8 GB, `entities.ftm.json` per bron) na
 - Ongewijzigde bronnen worden overgeslagen; alleen gewijzigde worden herdownload.
 - Kies een pad met `--root` of env `PEP_DATA_DIR`.
 
-Wanneer de EU- of PEP-data verandert, herbouwt de app `data/search.sqlite` automatisch op de achtergrond — een restart is niet nodig.
+Wanneer de EU- of PEP-data verandert, herbouwt de app `data/search.sqlite` automatisch op de achtergrond — een restart is niet nodig. Na een downloader-run bouwt de app de index dus zelf opnieuw; de status is dan kort `building` en toont "Index wordt opgebouwd…" zolang de rebuild loopt.
 
 **Cron (macOS/Linux), wekelijks maandag 04:00:**
 
