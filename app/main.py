@@ -345,6 +345,11 @@ def create_app(
                     threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
         meta = state["meta"]
         stats = state["index_stats"] or {}
+        methods = []
+        if local_enabled:
+            methods.append("local")
+        if entra_config is not None:
+            methods.append("entra")
         return {
             "version": os.environ.get("APP_VERSION", "dev"),
             "cached_at": meta.get("downloaded_at"),
@@ -353,6 +358,7 @@ def create_app(
             "data_age_hours": _data_age_hours(meta.get("downloaded_at")),
             "opensanctions_active": opensanctions_active,
             "source": meta.get("status", "unknown"),
+            "auth": {"required": auth_required, "methods": methods},
             "index": {
                 "enabled": state["index_status"] != "disabled",
                 "status": state["index_status"],
