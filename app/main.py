@@ -10,17 +10,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import audit
 from . import auth
+from . import batch
 from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_ingest
 from . import search_index
-from .export import render_search_csv, render_search_pdf, render_search_xlsx
+from .export import render_batch_csv, render_batch_pdf, render_search_csv, render_search_pdf, render_search_xlsx
 
 load_dotenv()
 
@@ -392,7 +393,7 @@ def create_app(
             logger.exception("Verversen mislukt")
             raise HTTPException(status_code=503, detail="Verversen mislukt")
 
-    def run_search(query: matcher.SearchQuery) -> tuple[list[dict], list[str]]:
+    def run_search(query: matcher.SearchQuery, include_opensanctions: bool = True) -> tuple[list[dict], list[str]]:
         results = []
         warnings = []
         if state["index_status"] == "ready":
@@ -412,7 +413,7 @@ def create_app(
         else:
             for r in matcher.search_eu(state["entities"], query):
                 results.append(_serialize_eu_result_from_dict(r, query.name))
-        if opensanctions_active:
+        if include_opensanctions and opensanctions_active:
             try:
                 for r in opensanctions.match_opensanctions(
                     os_api_key, query.name, query.birth_year, query.nationality, query.birth_place
@@ -441,6 +442,34 @@ def create_app(
             )
         except Exception:
             logger.warning("Audit-log mislukt", exc_info=True)
+
+    def _log_batch(request: Request, query: dict, result_count: int, user: str | None = None) -> None:
+        try:
+            audit.log_event(
+                audit_db,
+                ip=request.client.host if request.client else "",
+                user=user,
+                user_agent=request.headers.get("user-agent", ""),
+                method=request.method,
+                path=request.url.path,
+                query=query,
+                result_count=result_count,
+                sources=[],
+                threshold=matcher.THRESHOLD,
+            )
+        except Exception:
+            logger.warning("Audit-log mislukt", exc_info=True)
+
+    def _batch_search_fn(naam, geboortejaar=None, nationaliteit=None, geboorteplaats=None, type=None):
+        query = matcher.SearchQuery(
+            name=naam,
+            birth_year=geboortejaar,
+            nationality=nationaliteit,
+            birth_place=geboorteplaats,
+            entity_type=type,
+        )
+        results, _warnings = run_search(query, include_opensanctions=False)
+        return results
 
     @app.get("/api/audit")
     def audit_events(
@@ -650,6 +679,108 @@ def create_app(
             extension = "pdf"
         filename = f"screening-{now.strftime('%Y-%m-%d')}.{extension}"
         return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.post("/api/batch")
+    async def create_batch(
+        request: Request,
+        user: dict | None = Depends(get_current_user),
+        file: UploadFile = File(...),
+    ):
+        _check_roles(user, ("admin", "analist"))
+        audit_user = user["username"] if user else None
+        filename = file.filename or "lijst.csv"
+        if file.size is not None and file.size > batch.MAX_BATCH_BYTES:
+            raise HTTPException(status_code=413, detail="Bestand is te groot (max 50 MB)")
+        content = await file.read(batch.MAX_BATCH_BYTES + 1)
+        if len(content) > batch.MAX_BATCH_BYTES:
+            raise HTTPException(status_code=413, detail="Bestand is te groot (max 50 MB)")
+        try:
+            rows, errors = batch.parse_input(filename, content)
+        except batch.RowLimitExceeded as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except batch.BatchInputError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        batch_db = batch.default_batch_db()
+        job_id = batch.create_job(batch_db, filename, rows, errors=errors)
+        _log_batch(request, {"batch_id": job_id, "filename": filename, "rows": len(rows), "errors": len(errors)}, len(rows), user=audit_user)
+        threading.Thread(target=batch.process_job, args=(batch_db, job_id, _batch_search_fn), daemon=True).start()
+        return {"batch_id": job_id}
+
+    @app.get("/api/batch/{batch_id}")
+    def get_batch(batch_id: str, user: dict | None = Depends(get_current_user)):
+        _check_roles(user, ("admin", "analist"))
+        batch_db = batch.default_batch_db()
+        job = batch.get_job(batch_db, batch_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Batch niet gevonden")
+        return {
+            "status": job["status"],
+            "progress": job["progress"],
+            "total": job["total"],
+            "created_at": job["created_at"],
+            "finished_at": job["finished_at"],
+            "error_text": job["error_text"],
+            "errors": job["errors"],
+            "rows": batch.get_results(batch_db, batch_id),
+        }
+
+    def _batch_report(batch_id: str, format: str) -> tuple[bytes, str, str]:
+        batch_db = batch.default_batch_db()
+        job = batch.get_job(batch_db, batch_id)
+        if job is None or job["status"] != "done":
+            raise HTTPException(status_code=404, detail="Rapport niet beschikbaar")
+        results = batch.get_results(batch_db, batch_id)
+        if format == "csv":
+            content = render_batch_csv(job, results).encode("utf-8-sig")
+            media_type = "text/csv; charset=utf-8"
+            extension = "csv"
+        else:
+            content = render_batch_pdf(job, results, state["meta"])
+            media_type = "application/pdf"
+            extension = "pdf"
+        filename = f"batch-rapport-{datetime.now().astimezone().strftime('%Y-%m-%d')}.{extension}"
+        return content, media_type, filename
+
+    @app.get("/api/batch/{batch_id}/report.pdf")
+    def batch_report_pdf(
+        request: Request,
+        batch_id: str,
+        user: dict | None = Depends(get_current_user),
+    ):
+        _check_roles(user, ("admin", "analist"))
+        try:
+            content, media_type, filename = _batch_report(batch_id, "pdf")
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("PDF-generatie mislukt")
+            raise HTTPException(status_code=500, detail="PDF-generatie mislukt")
+        audit_user = user["username"] if user else None
+        _log_batch(request, {"batch_id": batch_id, "format": "pdf"}, 1, user=audit_user)
+        return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    @app.get("/api/batch/{batch_id}/report.csv")
+    def batch_report_csv(
+        request: Request,
+        batch_id: str,
+        user: dict | None = Depends(get_current_user),
+    ):
+        _check_roles(user, ("admin", "analist"))
+        try:
+            content, media_type, filename = _batch_report(batch_id, "csv")
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("CSV-generatie mislukt")
+            raise HTTPException(status_code=500, detail="CSV-generatie mislukt")
+        audit_user = user["username"] if user else None
+        _log_batch(request, {"batch_id": batch_id, "format": "csv"}, 1, user=audit_user)
+        return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    try:
+        batch.mark_stale_jobs(batch.default_batch_db())
+    except Exception:
+        logger.exception("Startup sweep van verweesde batch-jobs mislukt")
 
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

@@ -267,10 +267,10 @@ def test_export_rows_empty():
     assert _export_rows([]) == []
 
 
-def test_render_csv_has_bom_header_and_data_row():
+def test_render_csv_has_header_and_data_row():
     text = render_search_csv(_payload()["results"], _payload()["query"])
-    assert text.startswith("\ufeff")
-    lines = text.lstrip("\ufeff").rstrip("\r\n").split("\r\n")
+    assert not text.startswith("\ufeff")
+    lines = text.rstrip("\r\n").split("\r\n")
     assert len(lines) == 2
     assert lines[0] == "naam;score;bron;datasets;match-details;eu_referentie;geboortedata;nationaliteit;links"
     assert "JORGE FERNÁNDEZ" in lines[1]
@@ -284,9 +284,9 @@ def test_render_csv_special_chars_roundtrip():
         {"feature": "land", "score": 90, "label": "Land 90%; via AR"},
     ]
     text = render_search_csv(results, _payload()["query"])
-    assert "\ufeff" in text
+    assert "\ufeff" not in text
     assert "\r\n" in text
-    parsed = list(csv.reader(StringIO(text.lstrip("\ufeff")), delimiter=";"))
+    parsed = list(csv.reader(StringIO(text), delimiter=";"))
     assert parsed[0] == ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
     assert parsed[1][0] == "JORGE FERNÁNDEZ"
     assert parsed[1][4] == 'Naam 100% (via "JORGE FERNÁNDEZ");Land 90%; via AR'
@@ -294,8 +294,8 @@ def test_render_csv_special_chars_roundtrip():
 
 def test_render_csv_empty_results_header_only():
     text = render_search_csv([], _payload()["query"])
-    assert text.startswith("\ufeff")
-    lines = text.lstrip("\ufeff").rstrip("\r\n").split("\r\n")
+    assert not text.startswith("\ufeff")
+    lines = text.rstrip("\r\n").split("\r\n")
     assert lines == ["naam;score;bron;datasets;match-details;eu_referentie;geboortedata;nationaliteit;links"]
 
 
