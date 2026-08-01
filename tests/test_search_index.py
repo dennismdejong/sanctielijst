@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -9,8 +8,6 @@ from app.search_index import (
     fold,
     tokens,
     _eu_records,
-    _pep_records,
-    _positions_by_holder,
 )
 
 
@@ -73,28 +70,34 @@ def write_ftm(root, dataset, entities):
             fh.write(json.dumps(e) + "\n")
 
 
-def test_pep_records_filters():
-    import tempfile
-    root = Path(tempfile.mkdtemp())
-    write_ftm(root, "ds1", [
+from app.search_index import _open, build_index
+
+
+def test_stream_pep_filters_and_fields(tmp_path):
+    write_ftm(tmp_path, "ds1", [
         {"id": "NK-1", "caption": "JORGE FERNÁNDEZ", "schema": "Person", "target": True, "datasets": ["ds1"],
          "properties": {"name": ["JORGE FERNÁNDEZ"], "birthDate": ["1965-03-01"], "citizenship": ["ar"], "topics": ["role.pep"]}},
         {"id": "NK-2", "caption": "Maria", "schema": "Person", "target": False, "datasets": ["ds1"], "properties": {}},
         {"id": "NK-3", "caption": "X", "schema": "Occupancy", "target": True, "datasets": ["ds1"], "properties": {}},
     ])
-    write_ftm(root, "ds2", [
+    write_ftm(tmp_path, "ds2", [
         {"id": "NK-4", "caption": "ACME", "schema": "Company", "target": True, "datasets": ["ds2"], "properties": {"name": ["ACME"]}},
     ])
-    write_ftm(root, "ds3", [])  # empty dataset file must not collide
-    records = _pep_records(root)
-    ids = [r["id"] for r in records]
-    assert ids == ["NK-1", "NK-4"]
-    jorge = records[0]
-    assert jorge["source"] == "pep"
-    assert jorge["names"] == ["JORGE FERNÁNDEZ"]
-    assert jorge["birth_dates"] == ["1965-03-01"]
-    assert jorge["citizenships"] == ["ar"]
-    assert jorge["datasets"] == ["ds1"]
+    write_ftm(tmp_path, "ds3", [])  # leeg dataset-bestand mag niet botsen
+    stats = build_index(tmp_path / "search.sqlite", [], tmp_path)
+    assert stats["pep_count"] == 2
+    assert stats["source_count"] == 2
+    db = _open(tmp_path / "search.sqlite")
+    rows = db.execute(
+        "SELECT id, names, birth_dates, citizenships, datasets, raw FROM entities WHERE source = 'pep' ORDER BY id"
+    ).fetchall()
+    assert [r["id"] for r in rows] == ["NK-1", "NK-4"]
+    jorge = rows[0]
+    assert json.loads(jorge["names"]) == ["JORGE FERNÁNDEZ"]
+    assert json.loads(jorge["birth_dates"]) == ["1965-03-01"]
+    assert json.loads(jorge["citizenships"]) == ["ar"]
+    assert json.loads(jorge["datasets"]) == ["ds1"]
+    assert jorge["raw"] is None
 
 
 def pep_person(entity_id="Q1", name="JORGE FERNÁNDEZ"):
@@ -117,28 +120,32 @@ def pep_occupancy(holder, post, status="current", start="", end=""):
             "target": False, "datasets": ["ds1"], "properties": props}
 
 
-def test_pep_records_positions(tmp_path):
+def test_stream_positions_resolved(tmp_path):
     write_ftm(tmp_path, "ds1", [
         pep_person(),
         pep_position("P1", "Minister of Defence"),
         pep_occupancy("Q1", "P1", status="current", start="2020-01-01", end="2024-01-01"),
     ])
-    records = _pep_records(tmp_path, _positions_by_holder(tmp_path))
-    assert records[0]["positions"] == [
+    build_index(tmp_path / "search.sqlite", [], tmp_path)
+    db = _open(tmp_path / "search.sqlite")
+    row = db.execute("SELECT positions FROM entities WHERE id = 'Q1'").fetchone()
+    assert json.loads(row["positions"]) == [
         {"role": "Minister of Defence", "status": "current", "start": "2020-01-01", "end": "2024-01-01"}
     ]
 
 
-def test_pep_records_positions_fallback_to_post_id(tmp_path):
+def test_stream_positions_fallback_to_post_id(tmp_path):
     write_ftm(tmp_path, "ds1", [
         pep_person(),
         pep_occupancy("Q1", "P-UNKNOWN"),
     ])
-    records = _pep_records(tmp_path, _positions_by_holder(tmp_path))
-    assert records[0]["positions"] == [{"role": "P-UNKNOWN", "status": "current", "start": "", "end": ""}]
+    build_index(tmp_path / "search.sqlite", [], tmp_path)
+    db = _open(tmp_path / "search.sqlite")
+    row = db.execute("SELECT positions FROM entities WHERE id = 'Q1'").fetchone()
+    assert json.loads(row["positions"]) == [{"role": "P-UNKNOWN", "status": "current", "start": "", "end": ""}]
 
 
-def test_pep_records_positions_multiple_sorted_newest_first(tmp_path):
+def test_stream_positions_sorted_newest_first(tmp_path):
     write_ftm(tmp_path, "ds1", [
         pep_person(),
         pep_position("P1", "Minister"),
@@ -146,25 +153,18 @@ def test_pep_records_positions_multiple_sorted_newest_first(tmp_path):
         pep_occupancy("Q1", "P1", start="2020-01-01"),
         pep_occupancy("Q1", "P2", start="2023-01-01"),
     ])
-    records = _pep_records(tmp_path, _positions_by_holder(tmp_path))
-    assert [p["role"] for p in records[0]["positions"]] == ["Senator", "Minister"]
+    build_index(tmp_path / "search.sqlite", [], tmp_path)
+    db = _open(tmp_path / "search.sqlite")
+    row = db.execute("SELECT positions FROM entities WHERE id = 'Q1'").fetchone()
+    assert [p["role"] for p in json.loads(row["positions"])] == ["Senator", "Minister"]
 
 
-def test_pep_records_positions_default_empty(tmp_path):
+def test_stream_positions_default_empty(tmp_path):
     write_ftm(tmp_path, "ds1", [pep_person()])
-    records = _pep_records(tmp_path)
-    assert records[0]["positions"] == []
-
-
-def test_pep_record_raw_is_none():
-    import tempfile
-    root = Path(tempfile.mkdtemp())
-    write_ftm(root, "ds1", [
-        {"id": "NK-1", "caption": "JORGE FERNÁNDEZ", "schema": "Person", "target": True, "datasets": ["ds1"],
-         "properties": {"name": ["JORGE FERNÁNDEZ"]}},
-    ])
-    r = _pep_records(root)[0]
-    assert r["raw"] is None
+    build_index(tmp_path / "search.sqlite", [], tmp_path)
+    db = _open(tmp_path / "search.sqlite")
+    row = db.execute("SELECT positions FROM entities WHERE id = 'Q1'").fetchone()
+    assert json.loads(row["positions"]) == []
 
 
 import sqlite3
@@ -339,12 +339,15 @@ def test_ensure_index_corrupt_db_not_ready(tmp_path):
     assert result["stats"] is None
 
 
-def test_load_stats(tmp_path):
-    db_path = tmp_path / "search.sqlite"
-    build_fixture(tmp_path, db_path)
-    stats = load_stats(_open(db_path))
-    assert stats["eu_count"] == 1
-    assert stats["pep_count"] == 1
+def test_load_stats_from_meta(tmp_path):
+    write_ftm(tmp_path, "ds1", [pep_person()])
+    write_ftm(tmp_path, "ds2", [
+        {"id": "X1", "caption": "X", "schema": "Person", "target": True, "datasets": ["ds2"], "properties": {"name": ["X"]}},
+    ])
+    stats = build_index(tmp_path / "search.sqlite", [eu_entity()], tmp_path)
+    assert stats == {"eu_count": 1, "pep_count": 2, "total": 3, "source_count": 2}
+    loaded = load_stats(_open(tmp_path / "search.sqlite"))
+    assert loaded == stats
 
 
 def test_rebuild_index(tmp_path):

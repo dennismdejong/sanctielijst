@@ -13,7 +13,7 @@ MAX_RESULTS = 20
 INDEX_ENV = "PEP_INDEX_ENABLED"
 DB_FILENAME = "search.sqlite"
 FTM_FILENAME = "entities.ftm.json"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def default_db_path() -> Path:
@@ -55,101 +55,6 @@ def _eu_records(entities: list[dict]) -> list[dict]:
     return records
 
 
-def _extract_entity(line: str) -> dict | None:
-    try:
-        data = json.loads(line)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict) or not data.get("target"):
-        return None
-    schema = data.get("schema")
-    if schema not in ("Person", "Company"):
-        return None
-    props = data.get("properties") or {}
-    names = list((props.get("name") or []) + (props.get("alias") or []))
-    caption = data.get("caption") or ""
-    if caption and caption not in names:
-        names.insert(0, caption)
-    return {
-        "id": data.get("id", ""),
-        "caption": caption,
-        "schema": schema,
-        "datasets": data.get("datasets") or [],
-        "names": names,
-        "birth_dates": props.get("birthDate") or [],
-        "birth_places": props.get("birthPlace") or [],
-        "citizenships": props.get("citizenship") or [],
-        "political": props.get("political") or [],
-        "topics": props.get("topics") or [],
-    }
-
-
-def _positions_by_holder(pep_root: Path) -> dict[str, list[dict]]:
-    positions = {}
-    occupancies = []
-    for ftm in sorted(pep_root.glob(f"*/{FTM_FILENAME}")):
-        with ftm.open(encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(data, dict):
-                    continue
-                schema = data.get("schema")
-                if schema == "Position":
-                    positions[data.get("id", "")] = data.get("caption") or ""
-                elif schema == "Occupancy":
-                    occupancies.append(data)
-    by_holder: dict[str, list[dict]] = {}
-    for occ in occupancies:
-        props = occ.get("properties") or {}
-        for holder in props.get("holder") or []:
-            for post in props.get("post") or []:
-                by_holder.setdefault(holder, []).append({
-                    "role": positions.get(post) or post,
-                    "status": (props.get("status") or [""])[0],
-                    "start": (props.get("startDate") or [""])[0],
-                    "end": (props.get("endDate") or [""])[0],
-                })
-    for entries in by_holder.values():
-        entries.sort(key=lambda p: p["start"], reverse=True)
-    return by_holder
-
-
-def _pep_records(pep_root: Path, positions_map: dict[str, list[dict]] | None = None) -> list[dict]:
-    records = []
-    for ftm in sorted(pep_root.glob(f"*/{FTM_FILENAME}")):
-        with ftm.open(encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                entity = _extract_entity(line)
-                if entity is None:
-                    continue
-                records.append({
-                    "source": "pep",
-                    "id": entity["id"],
-                    "caption": entity["caption"],
-                    "schema": entity["schema"],
-                    "names": entity["names"],
-                    "birth_dates": entity["birth_dates"],
-                    "birth_places": entity["birth_places"],
-                    "citizenships": entity["citizenships"],
-                    "political": entity["political"],
-                    "topics": entity["topics"],
-                    "datasets": entity["datasets"],
-                    "eu_ref": "",
-                    "raw": None,
-                    "positions": list(positions_map.get(entity["id"], [])) if positions_map else [],
-                })
-    return records
-
-
 SCHEMA = """
 CREATE TABLE entities (
   rowid INTEGER PRIMARY KEY,
@@ -170,6 +75,10 @@ CREATE TABLE entities (
   raw TEXT
 );
 CREATE VIRTUAL TABLE names_fts USING fts5(names_folded, content='entities', content_rowid='rowid');
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE _positions (id TEXT PRIMARY KEY, caption TEXT NOT NULL);
+CREATE TABLE _occupancies (holder TEXT NOT NULL, post TEXT NOT NULL, status TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL);
+CREATE INDEX _occupancies_holder ON _occupancies(holder);
 """
 
 
@@ -183,41 +92,171 @@ def _schema(db) -> int:
     return db.execute("SELECT count(*) FROM entities").fetchone()[0]
 
 
+INSERT_SQL = (
+    "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, "
+    "citizenships, political, topics, positions, datasets, eu_ref, raw) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+)
+
+
+def _entity_row(r: dict) -> tuple:
+    names = r["names"]
+    return (
+        r["source"],
+        r["id"],
+        r["caption"],
+        r["schema"],
+        json.dumps(names, ensure_ascii=False),
+        " ".join(tokens(" ".join(names))),
+        json.dumps(r["birth_dates"], ensure_ascii=False),
+        json.dumps(r["birth_places"], ensure_ascii=False),
+        json.dumps(r["citizenships"], ensure_ascii=False),
+        json.dumps(r["political"], ensure_ascii=False),
+        json.dumps(r["topics"], ensure_ascii=False),
+        json.dumps(r.get("positions") or [], ensure_ascii=False),
+        json.dumps(r["datasets"], ensure_ascii=False),
+        r["eu_ref"],
+    )
+
+
+def _insert_eu(db, eu_entities: list[dict]) -> int:
+    rows = []
+    for r in _eu_records(eu_entities):
+        rows.append(_entity_row(r) + (json.dumps(r["raw"], ensure_ascii=False),))
+    db.executemany(INSERT_SQL, rows)
+    return len(rows)
+
+
+def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
+    pep_count = 0
+    sources: set[str] = set()
+    pos_buf: list[tuple] = []
+    occ_buf: list[tuple] = []
+    ent_buf: list[tuple] = []
+
+    def flush() -> None:
+        nonlocal pos_buf, occ_buf, ent_buf
+        if pos_buf:
+            db.executemany("INSERT INTO _positions (id, caption) VALUES (?,?)", pos_buf)
+            pos_buf = []
+        if occ_buf:
+            db.executemany("INSERT INTO _occupancies (holder, post, status, start, end) VALUES (?,?,?,?,?)", occ_buf)
+            occ_buf = []
+        if ent_buf:
+            db.executemany(INSERT_SQL, ent_buf)
+            ent_buf = []
+
+    for ftm in sorted(pep_root.glob(f"*/{FTM_FILENAME}")):
+        dataset = ftm.parent.name
+        with ftm.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                schema = data.get("schema")
+                if schema == "Position":
+                    pos_buf.append((data.get("id", ""), data.get("caption") or ""))
+                elif schema == "Occupancy":
+                    props = data.get("properties") or {}
+                    occ_buf.append((
+                        (props.get("holder") or [""])[0],
+                        (props.get("post") or [""])[0],
+                        (props.get("status") or [""])[0],
+                        (props.get("startDate") or [""])[0],
+                        (props.get("endDate") or [""])[0],
+                    ))
+                elif schema in ("Person", "Company") and data.get("target"):
+                    props = data.get("properties") or {}
+                    names = list((props.get("name") or []) + (props.get("alias") or []))
+                    caption = data.get("caption") or ""
+                    if caption and caption not in names:
+                        names.insert(0, caption)
+                    folded = " ".join(tokens(" ".join(names)))
+                    ent_buf.append((
+                        "pep",
+                        data.get("id", ""),
+                        caption,
+                        schema,
+                        json.dumps(names, ensure_ascii=False),
+                        folded,
+                        json.dumps(props.get("birthDate") or [], ensure_ascii=False),
+                        json.dumps(props.get("birthPlace") or [], ensure_ascii=False),
+                        json.dumps(props.get("citizenship") or [], ensure_ascii=False),
+                        json.dumps(props.get("political") or [], ensure_ascii=False),
+                        json.dumps(props.get("topics") or [], ensure_ascii=False),
+                        "[]",
+                        json.dumps(data.get("datasets") or [], ensure_ascii=False),
+                        "",
+                        None,
+                    ))
+                    pep_count += 1
+                    sources.add(dataset)
+                if len(pos_buf) + len(occ_buf) + len(ent_buf) >= 20000:
+                    flush()
+    flush()
+    return pep_count, len(sources)
+
+
+def _fill_positions(db) -> None:
+    db.execute(
+        """
+        UPDATE entities
+        SET positions = COALESCE((
+          SELECT json_group_array(json_object(
+            'role', COALESCE(p.caption, o.post),
+            'status', o.status,
+            'start', o.start,
+            'end', o.end
+          ) ORDER BY o.start DESC)
+          FROM _occupancies o LEFT JOIN _positions p ON p.id = o.post
+          WHERE o.holder = entities.id
+        ), '[]')
+        WHERE source = 'pep'
+        """
+    )
+
+
+def _fill_fts(db) -> None:
+    db.execute("INSERT INTO names_fts (rowid, names_folded) SELECT rowid, names_folded FROM entities")
+
+
+def _write_meta(db, eu_count: int, pep_count: int, source_count: int) -> None:
+    db.executemany(
+        "INSERT INTO meta (key, value) VALUES (?,?)",
+        [
+            ("eu_count", str(eu_count)),
+            ("pep_count", str(pep_count)),
+            ("source_count", str(source_count)),
+        ],
+    )
+
+
 def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -> dict:
     eu_entities = eu_entities or []
-    positions_map = _positions_by_holder(pep_root)
-    records = _eu_records(eu_entities) + _pep_records(pep_root, positions_map)
     new_path = db_path.with_suffix(db_path.suffix + ".new")
     new_path.unlink(missing_ok=True)
     db = None
     try:
         db = _open(new_path)
+        db.execute("PRAGMA page_size = 4096")
+        db.execute("PRAGMA journal_mode = OFF")
+        db.execute("PRAGMA synchronous = OFF")
+        db.execute("PRAGMA cache_size = -64000")
         db.executescript(SCHEMA)
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        db.executemany(
-            "INSERT INTO entities (source, id, caption, schema, names, names_folded, birth_dates, birth_places, citizenships, political, topics, positions, datasets, eu_ref, raw) "
-            "VALUES (:source, :id, :caption, :schema, :names, :names_folded, :birth_dates, :birth_places, :citizenships, :political, :topics, :positions, :datasets, :eu_ref, :raw)",
-            [{
-                "source": r["source"],
-                "id": r["id"],
-                "caption": r["caption"],
-                "schema": r["schema"],
-                "names": json.dumps(r["names"], ensure_ascii=False),
-                "names_folded": " ".join(tokens(" ".join(r["names"]))),
-                "birth_dates": json.dumps(r["birth_dates"], ensure_ascii=False),
-                "birth_places": json.dumps(r["birth_places"], ensure_ascii=False),
-                "citizenships": json.dumps(r["citizenships"], ensure_ascii=False),
-                "political": json.dumps(r["political"], ensure_ascii=False),
-                "topics": json.dumps(r["topics"], ensure_ascii=False),
-                "positions": json.dumps(r.get("positions") or [], ensure_ascii=False),
-                "datasets": json.dumps(r["datasets"], ensure_ascii=False),
-                "eu_ref": r["eu_ref"],
-                "raw": json.dumps(r["raw"], ensure_ascii=False) if r["raw"] is not None else None,
-            } for r in records],
-        )
-        for idx, r in enumerate(records):
-            names_folded = " ".join(tokens(" ".join(r["names"])))
-            db.execute("INSERT INTO names_fts (rowid, names_folded) VALUES (?, ?)", (idx + 1, names_folded))
+        eu_count = _insert_eu(db, eu_entities)
+        pep_count, source_count = _stream_pep(db, pep_root)
+        _fill_positions(db)
+        _fill_fts(db)
+        _write_meta(db, eu_count, pep_count, source_count)
+        db.execute("DROP TABLE _occupancies")
+        db.execute("DROP TABLE _positions")
         db.commit()
         db.close()
         db = None
@@ -226,9 +265,7 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path) -
         if db is not None:
             db.close()
         new_path.unlink(missing_ok=True)
-    counts = {"eu_count": sum(1 for r in records if r["source"] == "eu"), "pep_count": sum(1 for r in records if r["source"] == "pep")}
-    counts["total"] = counts["eu_count"] + counts["pep_count"]
-    return counts
+    return {"eu_count": eu_count, "pep_count": pep_count, "total": eu_count + pep_count, "source_count": source_count}
 
 
 def _birth_year(value: str) -> int | None:
@@ -364,10 +401,15 @@ def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path) -> bool:
 
 
 def load_stats(db) -> dict:
-    eu = db.execute("SELECT count(*) FROM entities WHERE source = 'eu'").fetchone()[0]
-    pep = db.execute("SELECT count(*) FROM entities WHERE source = 'pep'").fetchone()[0]
-    sources = db.execute("SELECT count(DISTINCT json_each.value) FROM entities, json_each(datasets) WHERE source = 'pep'").fetchone()[0]
-    return {"eu_count": eu, "pep_count": pep, "total": eu + pep, "source_count": sources}
+    row = dict(db.execute("SELECT key, value FROM meta").fetchall())
+    eu = int(row.get("eu_count", 0))
+    pep = int(row.get("pep_count", 0))
+    return {
+        "eu_count": eu,
+        "pep_count": pep,
+        "total": eu + pep,
+        "source_count": int(row.get("source_count", 0)),
+    }
 
 
 def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
