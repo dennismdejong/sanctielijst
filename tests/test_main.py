@@ -1131,3 +1131,44 @@ def test_gating_viewer_cannot_batch(monkeypatch, auth_env):
     client.post("/api/auth/login", json={"username": "alice", "password": "geheim"})
     resp = client.post("/api/batch", files={"file": ("lijst.csv", _batch_csv("naam\nJan\n"), "text/csv")})
     assert resp.status_code == 403
+
+
+def test_batch_skips_opensanctions_while_search_uses_it(tmp_path, monkeypatch):
+    import app.main as main
+
+    calls = []
+
+    def recording_match(*args, **kwargs):
+        calls.append(args)
+        return []
+
+    monkeypatch.setattr(main.opensanctions, "match_opensanctions", recording_match)
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(
+        entities=ENTITIES,
+        eu_root=tmp_path,
+        pep_root=tmp_path,
+        search_db=tmp_path / "search.sqlite",
+        os_api_key="KEY",
+    ))
+    client.get("/api/search", params={"name": "JORGE FERNANDEZ"})
+    assert len(calls) == 1
+    batch_id = _create_batch(client, "naam\nJORGE FERNANDEZ\nJohn Smith\n")
+    _wait_done(client, batch_id)
+    assert len(calls) == 1
+    assert calls[0][0] == "KEY"
+
+
+def test_startup_sweep_marks_orphaned_batch_jobs_error(tmp_path, monkeypatch):
+    import app.batch as batch_module
+
+    db_path = tmp_path / "batch.sqlite"
+    job_id = batch_module.create_job(db_path, "lijst.csv", [{
+        "naam": "Jan", "geboortejaar": None, "nationaliteit": None, "geboorteplaats": None, "type": None,
+    }])
+    TestClient(create_app(entities=ENTITIES))
+    job = batch_module.get_job(db_path, job_id)
+    assert job["status"] == "error"
+    assert job["error_text"] == "Onderbroken door herstart"
+    assert job["finished_at"] is not None

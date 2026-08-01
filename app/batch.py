@@ -271,6 +271,31 @@ def get_results(db_path: Path, job_id: str) -> list[dict]:
     return results
 
 
+def mark_stale_jobs(
+    db_path: Path,
+    stale_statuses: tuple[str, ...] = ("pending", "running"),
+    error_text: str = "Onderbroken door herstart",
+) -> int:
+    """Mark orphaned batch jobs as ``error`` after a restart.
+
+    ``process_job`` runs in a daemon thread with no persistence hook; if the
+    process dies mid-batch the job would otherwise stay ``pending``/``running``
+    forever and the report endpoints would permanently 404. Called from
+    ``create_app`` at startup; a no-op when the batch DB does not exist yet.
+    Returns the number of jobs updated.
+    """
+    if not db_path.exists():
+        return 0
+    placeholders = ",".join("?" for _ in stale_statuses)
+    with _open(db_path) as conn:
+        cursor = conn.execute(
+            f"UPDATE batch_jobs SET status = 'error', finished_at = ?, error_text = ? WHERE status IN ({placeholders})",
+            (datetime.now(timezone.utc).isoformat(), error_text, *stale_statuses),
+        )
+        conn.commit()
+        return cursor.rowcount
+
+
 def process_job(db_path: Path, job_id: str, search_fn, row_limit: int = DEFAULT_ROW_LIMIT) -> None:
     """Process every pending result row through ``search_fn`` and store the matches.
 

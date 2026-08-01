@@ -332,3 +332,40 @@ def test_process_job_resume_after_error_reports_total_progress(tmp_path):
     job = batch.get_job(db_path, job_id)
     assert job["status"] == "done"
     assert job["progress"] == 5
+
+
+def test_mark_stale_jobs_flags_pending_and_running(tmp_path):
+    db_path = tmp_path / "batch.sqlite"
+    pending_id = batch.create_job(db_path, "lijst.csv", [_row("Jan")])
+    running_id = batch.create_job(db_path, "lijst.csv", [_row("Piet")])
+    done_id = batch.create_job(db_path, "lijst.csv", [_row("Kees")])
+    with batch._open(db_path) as conn:
+        conn.execute("UPDATE batch_jobs SET status = 'running' WHERE id = ?", (running_id,))
+        conn.execute("UPDATE batch_jobs SET status = 'done' WHERE id = ?", (done_id,))
+        conn.commit()
+    updated = batch.mark_stale_jobs(db_path)
+    assert updated == 2
+    assert batch.get_job(db_path, pending_id)["status"] == "error"
+    assert batch.get_job(db_path, pending_id)["error_text"] == "Onderbroken door herstart"
+    assert batch.get_job(db_path, pending_id)["finished_at"] is not None
+    assert batch.get_job(db_path, running_id)["status"] == "error"
+    assert batch.get_job(db_path, done_id)["status"] == "done"
+    assert batch.get_job(db_path, done_id)["error_text"] is None
+
+
+def test_mark_stale_jobs_custom_statuses_and_text(tmp_path):
+    db_path = tmp_path / "batch.sqlite"
+    pending_id = batch.create_job(db_path, "lijst.csv", [_row("Jan")])
+    done_id = batch.create_job(db_path, "lijst.csv", [_row("Piet")])
+    with batch._open(db_path) as conn:
+        conn.execute("UPDATE batch_jobs SET status = 'done' WHERE id = ?", (done_id,))
+        conn.commit()
+    updated = batch.mark_stale_jobs(db_path, stale_statuses=("done",), error_text="zelf")
+    assert updated == 1
+    assert batch.get_job(db_path, done_id)["status"] == "error"
+    assert batch.get_job(db_path, done_id)["error_text"] == "zelf"
+    assert batch.get_job(db_path, pending_id)["status"] == "pending"
+
+
+def test_mark_stale_jobs_missing_db_is_noop(tmp_path):
+    assert batch.mark_stale_jobs(tmp_path / "batch.sqlite") == 0

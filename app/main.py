@@ -358,7 +358,7 @@ def create_app(
             logger.exception("Verversen mislukt")
             raise HTTPException(status_code=503, detail="Verversen mislukt")
 
-    def run_search(query: matcher.SearchQuery) -> tuple[list[dict], list[str]]:
+    def run_search(query: matcher.SearchQuery, include_opensanctions: bool = True) -> tuple[list[dict], list[str]]:
         results = []
         warnings = []
         if state["index_status"] == "ready":
@@ -378,7 +378,7 @@ def create_app(
         else:
             for r in matcher.search_eu(state["entities"], query):
                 results.append(_serialize_eu_result_from_dict(r, query.name))
-        if opensanctions_active:
+        if include_opensanctions and opensanctions_active:
             try:
                 for r in opensanctions.match_opensanctions(
                     os_api_key, query.name, query.birth_year, query.nationality, query.birth_place
@@ -433,7 +433,7 @@ def create_app(
             birth_place=geboorteplaats,
             entity_type=type,
         )
-        results, _warnings = run_search(query)
+        results, _warnings = run_search(query, include_opensanctions=False)
         return results
 
     @app.get("/api/audit")
@@ -741,6 +741,11 @@ def create_app(
         audit_user = user["username"] if user else None
         _log_batch(request, {"batch_id": batch_id, "format": "csv"}, 1, user=audit_user)
         return Response(content=content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+    try:
+        batch.mark_stale_jobs(batch.default_batch_db())
+    except Exception:
+        logger.exception("Startup sweep van verweesde batch-jobs mislukt")
 
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
