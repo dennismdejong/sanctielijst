@@ -74,9 +74,18 @@
             <button type="button" id="export-btn">Exporteer</button>
           </div>
         </div>
-        <button type="submit" id="search-btn">Zoeken</button>
+        <div class="row form-actions">
+          <button type="submit" id="search-btn">Zoeken</button>
+          <button type="button" id="watch-btn">Bewaak deze naam</button>
+        </div>
       </form>
       <p id="status-line" class="status-line" role="status"></p>
+    </section>
+    <section id="watchlist-panel" class="watchlist-panel">
+      <h2>Bewaakte namen</h2>
+      <p class="muted">Gewijzigde sanctiedata wordt periodiek gecontroleerd. Nieuwe matches verschijnen hier.</p>
+      <div id="watchlist-notices" class="watchlist-notices" role="status" hidden></div>
+      <div id="watchlist-list" class="watchlist-list"></div>
     </section>
     <section id="warnings" class="warnings" hidden></section>
     <section id="results" class="results" aria-live="polite"></section>

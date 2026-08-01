@@ -120,6 +120,54 @@ button:hover { opacity: 0.9; }
 }
 .export-field #export-btn { margin-top: 0; }
 
+.form-actions { align-items: center; }
+#watch-btn {
+  background: #fff;
+  color: var(--eu);
+  border: 1px solid var(--eu);
+}
+#watch-btn:hover { background: #eef3ff; opacity: 1; }
+
+.watchlist-panel {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+.watchlist-panel h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
+
+.watchlist-notices {
+  background: #eef3ff;
+  border: 1px solid var(--eu);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+.watchlist-notices p { margin: 0.25rem 0; }
+
+.watchlist-list { margin-top: 0.5rem; }
+.watchlist-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.watchlist-item:last-child { border-bottom: none; }
+.watchlist-name { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.watchlist-badge { background: var(--bad); }
+.watchlist-delete {
+  background: #fff;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+}
+.watchlist-delete:hover { background: #ffebe9; opacity: 1; }
+
 .status-line { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); }
 
 .warnings {

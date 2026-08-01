@@ -6,9 +6,14 @@ const statusLine = document.getElementById("status-line");
 const searchPanel = document.getElementById("search-panel");
 const loginPanel = document.getElementById("login-panel");
 const authBar = document.getElementById("auth-bar");
+const watchBtn = document.getElementById("watch-btn");
+const watchlistList = document.getElementById("watchlist-list");
+const watchlistNotices = document.getElementById("watchlist-notices");
 let currentUser = null;
 let authRequired = false;
 let authMethods = [];
+let lastDataVersion = null;
+let rescanning = false;
 
 function escapeHtml(value) {
   return String(value)
@@ -173,6 +178,9 @@ async function loadStatus() {
   }
   try {
     const s = await res.json();
+    if (typeof s.data_version === "number") {
+      handleDataVersion(s.data_version);
+    }
     if (s.auth) {
       authRequired = !!s.auth.required;
       authMethods = s.auth.methods || [];
@@ -368,13 +376,197 @@ async function maybeShowAuditLink() {
   footer.appendChild(link);
 }
 
+function showWatchNotice(message) {
+  const notice = document.createElement("p");
+  notice.textContent = message;
+  watchlistNotices.appendChild(notice);
+  watchlistNotices.hidden = false;
+  window.setTimeout(() => {
+    notice.remove();
+    if (!watchlistNotices.childElementCount) watchlistNotices.hidden = true;
+  }, 12000);
+}
+
+function readWatchEntry(watchId) {
+  try {
+    const raw = localStorage.getItem("watchlist." + watchId);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function watchCriteria(entry) {
+  const payload = { name: entry.name };
+  ["birth_year", "nationality", "birth_place", "entity_type"].forEach((key) => {
+    if (entry[key]) payload[key] = entry[key];
+  });
+  return payload;
+}
+
+async function addWatch() {
+  const name = document.getElementById("name").value.trim();
+  if (!name) {
+    showWatchNotice("Vul eerst een naam in om te bewaken.");
+    return;
+  }
+  const entry = {
+    name,
+    birth_year: document.getElementById("birth_year").value,
+    nationality: document.getElementById("nationality").value.trim(),
+    birth_place: document.getElementById("birth_place").value.trim(),
+    entity_type: document.getElementById("entity_type").value,
+    known: {},
+  };
+  let res;
+  try {
+    res = await fetch("/api/watchlists", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: name }),
+    });
+  } catch {
+    showWatchNotice("Bewaking toevoegen mislukt: server niet bereikbaar.");
+    return;
+  }
+  if (res.status === 401) {
+    requireLogin("Log in om een naam te bewaken.");
+    return;
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    showWatchNotice(`Bewaking toevoegen mislukt: ${body.detail || "fout"}`);
+    return;
+  }
+  const watch = (await res.json()).watchlist;
+  localStorage.setItem("watchlist." + watch.id, JSON.stringify(entry));
+  showWatchNotice(`Bewaking toegevoegd voor ${name}.`);
+  await loadWatchlists();
+}
+
+async function deleteWatch(watchId) {
+  try {
+    await fetch(`/api/watchlists/${encodeURIComponent(watchId)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+  } catch {}
+  localStorage.removeItem("watchlist." + watchId);
+  await loadWatchlists();
+}
+
+async function loadWatchlists() {
+  let res;
+  try {
+    res = await fetch("/api/watchlists", { credentials: "same-origin" });
+  } catch {
+    return;
+  }
+  if (!res.ok) return;
+  const watchlists = (await res.json()).watchlists || [];
+  if (!watchlists.length) {
+    watchlistList.innerHTML = '<p class="muted">Nog geen bewaakte namen.</p>';
+    return;
+  }
+  let allHits = [];
+  let hitsRes;
+  try {
+    hitsRes = await fetch("/api/watchlists/hits", { credentials: "same-origin" });
+  } catch {
+    hitsRes = null;
+  }
+  if (hitsRes && hitsRes.ok) {
+    allHits = (await hitsRes.json()).hits || [];
+  }
+  const byWatch = {};
+  allHits.forEach((hit) => {
+    (byWatch[hit.watchlist_id] = byWatch[hit.watchlist_id] || []).push(hit);
+  });
+  watchlistList.innerHTML = watchlists.map((w) => {
+    const entry = readWatchEntry(w.id);
+    const name = (entry && entry.name) || w.label;
+    const hits = byWatch[w.id] || [];
+    const newCount = hits.filter((hit) => {
+      const match = hit.match || {};
+      return !(entry && entry.known && entry.known[match.id]);
+    }).length;
+    const badge = newCount ? `<span class="badge watchlist-badge">${newCount} nieuw</span>` : "";
+    return `
+      <div class="watchlist-item">
+        <div class="watchlist-name">
+          <strong>${escapeHtml(name)}</strong>
+          <span class="muted">${hits.length} hit(s)</span>
+          ${badge}
+        </div>
+        <button type="button" class="watchlist-delete" data-id="${escapeHtml(w.id)}">Verwijder</button>
+      </div>`;
+  }).join("");
+  watchlistList.querySelectorAll(".watchlist-delete").forEach((btn) => {
+    btn.addEventListener("click", () => deleteWatch(btn.dataset.id));
+  });
+}
+
+async function rescanWatchlists() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("watchlist.")) keys.push(key);
+  }
+  for (const key of keys) {
+    const watchId = key.slice("watchlist.".length);
+    const entry = readWatchEntry(watchId);
+    if (!entry || !entry.name) continue;
+    let res;
+    try {
+      res = await fetch(`/api/watchlists/${encodeURIComponent(watchId)}/rescan`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(watchCriteria(entry)),
+      });
+    } catch {
+      continue;
+    }
+    if (!res.ok) continue;
+    const data = await res.json().catch(() => ({}));
+    (data.hits || []).forEach((hit) => {
+      const match = hit.match || {};
+      if (!match.id || entry.known[match.id]) return;
+      entry.known[match.id] = match.score || 0;
+      showWatchNotice(`Nieuwe match voor ${entry.name}: ${match.naam || match.id}`);
+    });
+    localStorage.setItem(key, JSON.stringify(entry));
+  }
+  await loadWatchlists();
+}
+
+async function handleDataVersion(version) {
+  if (lastDataVersion === null) {
+    lastDataVersion = version;
+    return;
+  }
+  if (version === lastDataVersion || rescanning) return;
+  lastDataVersion = version;
+  rescanning = true;
+  try {
+    await rescanWatchlists();
+  } finally {
+    rescanning = false;
+  }
+}
+
 async function init() {
   await loadStatus();
   await loadAuth();
   await maybeShowAuditLink();
+  await loadWatchlists();
 }
 
 init();
+window.setInterval(loadStatus, 60000);
+
+watchBtn.addEventListener("click", addWatch);
 
 const exportBtn = document.getElementById("export-btn");
 exportBtn.addEventListener("click", () => {
