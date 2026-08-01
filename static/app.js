@@ -178,7 +178,7 @@ async function loadStatus() {
   }
   try {
     const s = await res.json();
-    if (typeof s.data_version === "number") {
+    if (typeof s.data_version === "number" && (!s.index || s.index.status !== "building")) {
       handleDataVersion(s.data_version);
     }
     if (s.auth) {
@@ -424,7 +424,7 @@ async function addWatch() {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label: name }),
+      body: JSON.stringify({}),
     });
   } catch {
     showWatchNotice("Bewaking toevoegen mislukt: server niet bereikbaar.");
@@ -547,7 +547,7 @@ async function rescanWatchlists() {
     const data = await res.json().catch(() => ({}));
     (data.hits || []).forEach((hit) => {
       const match = hit.match || {};
-      if (!match.id || match.id in entry.known) return;
+      if (!match.id || match.id in (entry.known || {})) return;
       entry.known[match.id] = match.score ?? 0;
       showWatchNotice(`Nieuwe match voor ${entry.name}: ${match.naam || match.id}`);
     });

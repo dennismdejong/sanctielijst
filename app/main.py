@@ -187,22 +187,32 @@ def _serialize_pep_result(result: dict, datasets_meta: dict) -> dict:
     }
 
 
-def _to_watchlist_match(result: dict) -> dict:
-    """Map a serialized run_search result to the watchlist match contract."""
+def _to_watchlist_match(result: dict) -> dict | None:
+    """Map a serialized run_search result to the watchlist match contract.
+
+    Returns ``None`` when the match carries no stable public entity id, so no
+    hit is persisted for it. The ``naam`` is always derived from public match
+    data (never the watched query name).
+    """
     source = result.get("source")
     entity = result.get("entity") or {}
     if source == "eu":
         match_id = entity.get("eu_reference_number") or ""
         datasets = ["eu"]
+        naam = (result.get("eu") or {}).get("matched_alias") or match_id
     elif source == "pep":
         match_id = (result.get("pep") or {}).get("id") or ""
         datasets = [d.get("id") for d in ((result.get("pep") or {}).get("datasets") or []) if d.get("id")]
+        naam = entity.get("name") or ""
     else:
         match_id = (result.get("opensanctions") or {}).get("id") or ""
         datasets = list((result.get("opensanctions") or {}).get("datasets") or [])
+        naam = entity.get("name") or ""
+    if not match_id:
+        return None
     return {
         "id": match_id,
-        "naam": entity.get("name") or "",
+        "naam": naam,
         "score": result.get("score", 0),
         "bron": source or "",
         "datasets": datasets,
@@ -521,7 +531,7 @@ def create_app(
             entity_type=entity_type,
         )
         results, _warnings = run_search(query, include_opensanctions=False)
-        return [_to_watchlist_match(r) for r in results]
+        return [m for r in results if (m := _to_watchlist_match(r)) is not None]
 
     @app.get("/api/audit")
     def audit_events(
@@ -886,7 +896,21 @@ def create_app(
         owned = {w["id"] for w in watchlist.list_watchlists(db_path, owner)}
         if watchlist_id not in owned:
             raise HTTPException(status_code=404, detail="Watchlist niet gevonden")
-        fields = {k: data[k] for k in ("birth_year", "nationality", "birth_place", "entity_type") if data.get(k) is not None}
+        fields = {}
+        birth_year = data.get("birth_year")
+        if birth_year is not None and str(birth_year).strip():
+            if isinstance(birth_year, bool):
+                raise HTTPException(status_code=422, detail="Ongeldig geboortejaar")
+            if isinstance(birth_year, (int, float)):
+                fields["birth_year"] = int(birth_year)
+            else:
+                try:
+                    fields["birth_year"] = int(str(birth_year).strip())
+                except ValueError:
+                    raise HTTPException(status_code=422, detail="Ongeldig geboortejaar")
+        for key in ("nationality", "birth_place", "entity_type"):
+            if data.get(key) is not None:
+                fields[key] = data[key]
         result = watchlist.rescan_watch(db_path, owner, watchlist_id, name, fields, _watchlist_search_fn, threshold=matcher.THRESHOLD)
         _log_watchlist(request, watchlist_id, "rescan", result["new"], user=user["username"] if user else None)
         return {"watchlist_id": result["watchlist_id"], "hits": result["hits"], "new": result["new"]}

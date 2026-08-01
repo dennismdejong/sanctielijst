@@ -1430,3 +1430,127 @@ def test_watchlist_gating_requires_login_when_required(auth_env, monkeypatch):
     assert client.get("/api/watchlists").status_code == 200
     wl = client.post("/api/watchlists", json={}).json()["watchlist"]
     assert client.post(f"/api/watchlists/{wl['id']}/rescan", json={"name": "Jan"}).status_code == 200
+
+
+def test_watchlist_client_payload_empty_body_label_blank(tmp_path):
+    import sqlite3
+
+    client = TestClient(create_app(entities=ENTITIES))
+    wl = client.post("/api/watchlists", json={}).json()["watchlist"]
+    assert wl["label"] == ""
+    conn = sqlite3.connect(tmp_path / "watchlists.sqlite")
+    try:
+        label = conn.execute("SELECT label FROM watchlists WHERE id = ?", (wl["id"],)).fetchone()[0]
+    finally:
+        conn.close()
+    assert label == ""
+
+
+def test_watchlist_watched_name_absent_after_full_client_cycle(tmp_path, monkeypatch):
+    import sqlite3
+
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    watched = "JORGE FERNANDEZ"
+    wl = client.post("/api/watchlists", json={}).json()["watchlist"]
+    assert wl["label"] == ""
+    resp = client.post(f"/api/watchlists/{wl['id']}/rescan", json={"name": watched, "birth_year": "1965"})
+    assert resp.status_code == 200, resp.text
+    conn = sqlite3.connect(tmp_path / "watchlists.sqlite")
+    try:
+        tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'") if not r[0].startswith("sqlite_")]
+        assert tables == ["watchlists", "watchlist_hits"]
+        for table in tables:
+            for row in conn.execute(f"SELECT * FROM {table}"):
+                for value in row:
+                    if isinstance(value, str):
+                        assert watched not in value
+    finally:
+        conn.close()
+
+
+def test_watchlist_rescan_full_criteria_string_birth_year(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    wl = client.post("/api/watchlists", json={}).json()["watchlist"]
+    resp = client.post(
+        f"/api/watchlists/{wl['id']}/rescan",
+        json={
+            "name": "JORGE FERNANDEZ",
+            "birth_year": "1965",
+            "nationality": "AR",
+            "birth_place": "Buenos Aires",
+            "entity_type": "person",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["new"] == 1
+    hit = data["hits"][0]["match"]
+    assert hit["bron"] == "pep"
+    assert hit["naam"] == "JORGE FERNÁNDEZ"
+
+
+def test_watchlist_rescan_invalid_birth_year_422(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    wl = client.post("/api/watchlists", json={}).json()["watchlist"]
+    resp = client.post(f"/api/watchlists/{wl['id']}/rescan", json={"name": "JORGE FERNANDEZ", "birth_year": "onbekend"})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Ongeldig geboortejaar"
+
+
+def test_to_watchlist_match_eu_naam_never_query_string():
+    from app.main import _to_watchlist_match
+
+    result = {
+        "source": "eu",
+        "score": 90,
+        "entity": {"name": "SECRET_QUERY_NAME", "eu_reference_number": "EU.1"},
+        "eu": {"matched_alias": None, "total_score": 90},
+    }
+    match = _to_watchlist_match(result)
+    assert match["naam"] != "SECRET_QUERY_NAME"
+    assert match["naam"] == "EU.1"
+
+
+def test_watchlist_eu_hit_naam_is_public_alias_not_query(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_search_db(tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    wl = client.post("/api/watchlists", json={}).json()["watchlist"]
+    resp = client.post(f"/api/watchlists/{wl['id']}/rescan", json={"name": "john smith"})
+    assert resp.status_code == 200, resp.text
+    eu = [h["match"] for h in resp.json()["hits"] if h["match"]["bron"] == "eu"]
+    assert eu
+    assert eu[0]["naam"] == "John Smith"
+    assert eu[0]["naam"] != "john smith"
+
+
+def test_to_watchlist_match_empty_id_returns_none():
+    from app.main import _to_watchlist_match
+
+    result = {
+        "source": "pep",
+        "score": 95,
+        "entity": {"name": "PUBLIC"},
+        "pep": {"id": "", "datasets": []},
+    }
+    assert _to_watchlist_match(result) is None
+
+
+def test_watchlist_rescan_skips_empty_id_hits(tmp_path, monkeypatch):
+    monkeypatch.setenv(search_index.INDEX_ENV, "1")
+    _write_pep_fixture(tmp_path)
+    entity = make_eu_entity()
+    entity["eu_reference_number"] = ""
+    search_index.build_index(tmp_path / "search.sqlite", [entity], tmp_path)
+    client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
+    wl = client.post("/api/watchlists", json={}).json()["watchlist"]
+    resp = client.post(f"/api/watchlists/{wl['id']}/rescan", json={"name": "John Smith"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["new"] == 0
+    assert client.get("/api/watchlists/hits").json()["hits"] == []
