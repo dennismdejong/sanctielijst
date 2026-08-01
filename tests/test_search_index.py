@@ -159,6 +159,25 @@ def test_stream_positions_sorted_newest_first(tmp_path):
     assert [p["role"] for p in json.loads(row["positions"])] == ["Senator", "Minister"]
 
 
+def test_stream_positions_duplicate_id_across_datasets(tmp_path):
+    write_ftm(tmp_path, "aa_first", [
+        pep_person(),
+        pep_position("P1", "Minister of Defence"),
+    ])
+    write_ftm(tmp_path, "zz_second", [
+        pep_position("P1", "Minister of Defence (updated)"),
+    ])
+    write_ftm(tmp_path, "cc_occupancy", [
+        pep_occupancy("Q1", "P1", status="current"),
+    ])
+    build_index(tmp_path / "search.sqlite", [], tmp_path)
+    db = _open(tmp_path / "search.sqlite")
+    row = db.execute("SELECT positions FROM entities WHERE id = 'Q1'").fetchone()
+    assert json.loads(row["positions"]) == [
+        {"role": "Minister of Defence (updated)", "status": "current", "start": "", "end": ""}
+    ]
+
+
 def test_stream_positions_default_empty(tmp_path):
     write_ftm(tmp_path, "ds1", [pep_person()])
     build_index(tmp_path / "search.sqlite", [], tmp_path)

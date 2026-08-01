@@ -137,7 +137,7 @@ def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
     def flush() -> None:
         nonlocal pos_buf, occ_buf, ent_buf
         if pos_buf:
-            db.executemany("INSERT INTO _positions (id, caption) VALUES (?,?)", pos_buf)
+            db.executemany("INSERT OR REPLACE INTO _positions (id, caption) VALUES (?,?)", pos_buf)
             pos_buf = []
         if occ_buf:
             db.executemany("INSERT INTO _occupancies (holder, post, status, start, end) VALUES (?,?,?,?,?)", occ_buf)
