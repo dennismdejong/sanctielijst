@@ -3,6 +3,11 @@ const resultsEl = document.getElementById("results");
 const emptyEl = document.getElementById("empty-state");
 const warningsEl = document.getElementById("warnings");
 const statusLine = document.getElementById("status-line");
+const searchPanel = document.getElementById("search-panel");
+const loginPanel = document.getElementById("login-panel");
+const authBar = document.getElementById("auth-bar");
+let currentUser = null;
+let authRequired = false;
 
 function escapeHtml(value) {
   return String(value)
@@ -156,7 +161,7 @@ function renderResults(data) {
 async function loadStatus() {
   let res;
   try {
-    res = await fetch("/api/status");
+    res = await fetch("/api/status", { credentials: "same-origin" });
   } catch {
     statusLine.textContent = "Status niet beschikbaar";
     return;
@@ -211,7 +216,13 @@ form.addEventListener("submit", async (e) => {
   emptyEl.hidden = true;
   warningsEl.hidden = true;
   try {
-    const res = await fetch(`/api/search?${params}`);
+    const res = await fetch(`/api/search?${params}`, { credentials: "same-origin" });
+    if (res.status === 401) {
+      authRequired = true;
+      resultsEl.innerHTML = "";
+      requireLogin("Log in om te kunnen zoeken.");
+      return;
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || "Fout bij zoeken");
@@ -224,12 +235,119 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
+function setLoggedIn(user) {
+  currentUser = user;
+  authBar.hidden = false;
+  authBar.innerHTML = `
+    <span>Ingelogd als <strong>${escapeHtml(user.username)}</strong> (${escapeHtml(user.role)})</span>
+    <button type="button" id="logout-btn">Uitloggen</button>`;
+  document.getElementById("logout-btn").addEventListener("click", async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+    } finally {
+      window.location.reload();
+    }
+  });
+}
+
+function setLoggedOut() {
+  currentUser = null;
+  authBar.hidden = false;
+  authBar.textContent = "";
+  const link = document.createElement("button");
+  link.type = "button";
+  link.id = "login-link";
+  link.textContent = "Inloggen";
+  link.addEventListener("click", () => openLoginPanel());
+  authBar.appendChild(link);
+}
+
+async function loadAuth() {
+  let res;
+  try {
+    res = await fetch("/api/auth/me", { credentials: "same-origin" });
+  } catch {
+    return;
+  }
+  if (res.ok) {
+    setLoggedIn(await res.json());
+  } else {
+    setLoggedOut();
+  }
+}
+
+async function refreshLoginMethods() {
+  const msBtn = document.getElementById("entra-login-btn");
+  let res;
+  try {
+    res = await fetch("/api/auth/login", { credentials: "same-origin", redirect: "manual" });
+  } catch {
+    msBtn.hidden = true;
+    return;
+  }
+  if (res.type === "opaqueredirect") {
+    msBtn.hidden = false;
+    return;
+  }
+  msBtn.hidden = true;
+  if (res.ok) {
+    const methods = (await res.json().catch(() => ({}))).methods || [];
+    document.getElementById("login-form").hidden = !methods.includes("local");
+  }
+}
+
+function openLoginPanel(message) {
+  loginPanel.hidden = false;
+  const errorEl = document.getElementById("login-error");
+  errorEl.textContent = message || "";
+  loginPanel.scrollIntoView({ block: "center" });
+  refreshLoginMethods();
+}
+
+function requireLogin(message) {
+  openLoginPanel(message);
+  searchPanel.hidden = true;
+}
+
+const loginForm = document.getElementById("login-form");
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const username = document.getElementById("login-username").value.trim();
+  const password = document.getElementById("login-password").value;
+  const errorEl = document.getElementById("login-error");
+  errorEl.textContent = "";
+  if (!username || !password) {
+    errorEl.textContent = "Vul gebruikersnaam en wachtwoord in";
+    return;
+  }
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || "Inloggen mislukt");
+    }
+    window.location.reload();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+});
+
+const entraBtn = document.getElementById("entra-login-btn");
+entraBtn.addEventListener("click", () => {
+  window.location.href = "/api/auth/login";
+});
+
 async function maybeShowAuditLink() {
   const footer = document.getElementById("footer");
   if (!footer) return;
   let res;
   try {
-    res = await fetch("/api/audit");
+    res = await fetch("/api/audit", { credentials: "same-origin" });
   } catch {
     return;
   }
@@ -243,6 +361,7 @@ async function maybeShowAuditLink() {
 
 async function init() {
   await loadStatus();
+  await loadAuth();
   await maybeShowAuditLink();
 }
 
@@ -250,6 +369,10 @@ init();
 
 const exportBtn = document.getElementById("export-btn");
 exportBtn.addEventListener("click", () => {
+  if (authRequired && !currentUser) {
+    requireLogin("Log in om te kunnen exporteren.");
+    return;
+  }
   const name = document.getElementById("name").value.trim();
   if (!name) return;
   const params = new URLSearchParams();

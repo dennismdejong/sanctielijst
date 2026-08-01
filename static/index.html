@@ -10,9 +10,27 @@
   <header class="hero">
     <h1>Compliance Zoeker</h1>
     <p>Zoek personen en bedrijven in de EU-sanctielijsten en OpenSanctions PEP-data.</p>
+    <div id="auth-bar" class="auth-bar" hidden></div>
   </header>
   <main>
-    <section class="search-panel">
+    <section id="login-panel" class="login-panel" hidden>
+      <h2>Inloggen</h2>
+      <p class="muted">Log in om te zoeken en te exporteren.</p>
+      <form id="login-form">
+        <div class="field">
+          <label for="login-username">Gebruikersnaam</label>
+          <input type="text" id="login-username" name="username" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="login-password">Wachtwoord</label>
+          <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" id="login-btn">Inloggen</button>
+        <button type="button" id="entra-login-btn" hidden>Login met Microsoft</button>
+      </form>
+      <p id="login-error" class="status-line" role="alert"></p>
+    </section>
+    <section id="search-panel" class="search-panel">
       <form id="search-form">
         <div class="field">
           <label for="name">Naam <span class="required">*</span></label>

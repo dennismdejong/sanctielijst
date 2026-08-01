@@ -45,6 +45,43 @@ cp .env.example .env
 
 De app leest `OPENSANCTIONS_API_KEY` uit de omgeving of `.env`. Zonder key draait de app volledig op de lokale EU- en PEP-data.
 
+## Login
+
+De app kent eigen gebruikers (gebruikersnaam/wachtwoord) en **Microsoft Entra ID** als Identity Provider. Na succesvolle authenticatie geeft de app een eigen, ondertekende sessie-cookie uit (`session`, 12 uur geldig, HttpOnly, SameSite=lax). Rollen: `admin` (alles, inclusief audit-log en gebruikersbeheer), `analist` (zoeken + exporteren + batch) en `viewer` (alleen zoeken). Een ingelogde gebruiker wordt vastgelegd in de audit-log (`user`-kolom); anonieme zoekopdrachten worden als `null` gelogd.
+
+### Eerste admin aanmaken (lokaal)
+
+```bash
+.venv/bin/python scripts/create_user.py --username admin --password '<sterk wachtwoord>' --role admin
+```
+
+Extra lokale gebruikers of een Entra-toewijzing:
+
+```bash
+.venv/bin/python scripts/create_user.py --username analist --password '<wachtwoord>' --role analist
+.venv/bin/python scripts/create_user.py --username bob@example.com --entra-subject <sub> --role viewer
+```
+
+Met `--db <pad>` kies je een andere database (default: `AUTH_DB` of `data/auth.sqlite`). Administrators kunnen ook gebruikers aanmaken via `POST /api/auth/users`.
+
+### Microsoft Entra ID
+
+Maak een app-registratie aan in het [Microsoft Entra admin center](https://entra.microsoft.com) (App registrations). Noteer de tenant-id en client-id en maak een client-secret aan (Certificates & secrets). Stel als redirect-URI het Web-platform in op `<jouw-domein>/api/auth/callback` — die moet exact overeenkomen met `AUTH_ENTRA_REDIRECT_URI`. Zet vervolgens in `.env`:
+
+```
+AUTH_ENTRA_ENABLED=1
+AUTH_ENTRA_TENANT=<tenant-id of 'organizations'>
+AUTH_ENTRA_CLIENT_ID=<client-id>
+AUTH_ENTRA_CLIENT_SECRET=<client-secret>
+AUTH_ENTRA_REDIRECT_URI=https://sanctielijst.brakketak.nl/api/auth/callback
+```
+
+Een onbekende Entra-gebruiker wordt bij de eerste login automatisch aangemaakt met rol `AUTH_ENTRA_DEFAULT_ROLE` (default `viewer`). De rol van een bestaande gebruiker pas je aan in de database (`data/auth.sqlite`, kolom `role`).
+
+### AUTH_REQUIRED
+
+`AUTH_REQUIRED=1` vereist een login voor zoeken en exporteren; `AUTH_REQUIRED=0` (default) laat de zoekpagina open. In beide gevallen staat er een discreet "Inloggen"-link in de header; zodra een login vereist is, vervangt de app het zoekformulier door het login-paneel.
+
 ## Wekelijks bijwerken EU-data (data.europa.eu)
 
 Download de EU sanctielijst (XML 1.1, ~25 MB) naar `data/eu/`:
@@ -79,7 +116,7 @@ Een event bevat het tijdstip (UTC), het client-IP, de user-agent, methode en pad
 
 Beheerweergave: `GET /api/audit` retourneert de events, gesorteerd op tijdstip en met paginering via `limit`/`offset`. Het endpoint is alleen actief als env `AUDIT_ADMIN_TOKEN` is ingesteld; toegang vereist `Authorization: Bearer <AUDIT_ADMIN_TOKEN>`. Zonder token is het endpoint uitgeschakeld (404). Een simpele admin-pagina staat op `/audit` (link in de footer, alleen zichtbaar als het endpoint actief is) en vraagt om het token.
 
-De kolom `user` wordt gevuld zodra login (Microsoft Entra ID of lokaal, zie het login-plan) is geïmplementeerd; tot die tijd is hij leeg.
+De kolom `user` wordt gevuld zodra iemand is ingelogd (lokaal of Microsoft Entra ID, zie "Login"); anonieme zoekopdrachten worden met `null` gelogd.
 
 ## Wekelijks bijwerken PEP-data (OpenSanctions)
 

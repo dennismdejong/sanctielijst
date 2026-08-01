@@ -29,6 +29,39 @@ body {
 .hero h1 { margin: 0 0 0.25rem; }
 .hero p { margin: 0; opacity: 0.9; }
 
+.auth-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+.auth-bar button {
+  background: transparent;
+  border: 1px solid #fff;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.85rem;
+}
+.auth-bar button:hover { background: rgba(255, 255, 255, 0.15); opacity: 1; }
+
+.login-panel {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+.login-panel h2 { margin: 0 0 0.25rem; font-size: 1.15rem; }
+.login-panel .field { margin-bottom: 0.75rem; }
+.login-panel #login-btn { margin-right: 0.5rem; }
+.login-panel #entra-login-btn {
+  background: #fff;
+  color: var(--eu);
+  border: 1px solid var(--eu);
+}
+.login-panel #entra-login-btn:hover { background: #eef3ff; opacity: 1; }
+
 main {
   max-width: 860px;
   margin: 0 auto;
