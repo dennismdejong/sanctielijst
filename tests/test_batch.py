@@ -95,6 +95,30 @@ def test_parse_csv_missing_name_column_raises():
         batch.parse_input("lijst.csv", content)
 
 
+def test_parse_csv_quoted_field_with_embedded_newline():
+    content = _csv_bytes('naam;geboortejaar\n"Van der\nBerg";1970\n"De Vries";1980\n')
+    rows, errors = batch.parse_input("lijst.csv", content)
+    assert errors == []
+    assert rows == [
+        _row("Van der\nBerg", geboortejaar=1970),
+        _row("De Vries", geboortejaar=1980),
+    ]
+
+
+def test_parse_csv_leading_blank_line_before_header():
+    content = _csv_bytes("\nnaam;geboortejaar\nJan;1970\n")
+    rows, errors = batch.parse_input("lijst.csv", content)
+    assert errors == []
+    assert rows == [_row("Jan", geboortejaar=1970)]
+
+
+def test_parse_csv_cp1252_encoding():
+    content = "naam;geboortejaar\nBjörk;1965\n".encode("cp1252")
+    rows, errors = batch.parse_input("lijst.csv", content)
+    assert errors == []
+    assert rows == [_row("Björk", geboortejaar=1965)]
+
+
 def test_parse_xlsx():
     content = _xlsx_bytes([["Naam", "Geboortejaar", "Nationaliteit"], ["Björk", 1965, "IS"]])
     rows, errors = batch.parse_input("lijst.xlsx", content)
@@ -201,3 +225,27 @@ def test_process_job_twice_is_idempotent(tmp_path):
     job = batch.get_job(db_path, job_id)
     assert job["status"] == "done"
     assert job["progress"] == 2
+
+
+def test_process_job_resume_after_error_reports_total_progress(tmp_path):
+    db_path = tmp_path / "batch.sqlite"
+    rows = [_row(f"p-{i}") for i in range(5)]
+    job_id = batch.create_job(db_path, "lijst.csv", rows)
+    calls = {"count": 0}
+
+    def failing_search_fn(naam, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 3:
+            raise RuntimeError("boom")
+        return []
+
+    with pytest.raises(RuntimeError):
+        batch.process_job(db_path, job_id, failing_search_fn)
+    job = batch.get_job(db_path, job_id)
+    assert job["status"] == "error"
+    assert job["progress"] == 2
+
+    batch.process_job(db_path, job_id, lambda naam, **kwargs: [{"matched": naam}])
+    job = batch.get_job(db_path, job_id)
+    assert job["status"] == "done"
+    assert job["progress"] == 5

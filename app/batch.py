@@ -13,7 +13,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -130,23 +130,38 @@ def _detect_delimiter(sample: str) -> str:
         return ";"
 
 
+def _decode_text(content: bytes) -> str:
+    """Decode input bytes defensively: UTF-8 (with BOM) first, then CP1252/Latin-1."""
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return content.decode("cp1252")
+    except UnicodeDecodeError:
+        pass
+    return content.decode("latin-1")
+
+
 def _parse_csv(content: bytes, row_limit: int) -> tuple[list[dict], list[dict]]:
-    text = content.decode("utf-8-sig")
-    lines = text.splitlines()
-    if not any(line.strip() for line in lines):
+    text = _decode_text(content)
+    if not text.strip():
         raise BatchInputError("Bestand is leeg")
-    non_blank = [line for line in lines if line.strip()]
-    delimiter = _detect_delimiter(non_blank[0] + "\n" + (non_blank[1] if len(non_blank) > 1 else ""))
-    reader = csv.reader(lines, delimiter=delimiter)
-    header = next(reader)
-    mapping = _map_columns(header)
-    if "naam" not in mapping:
-        raise BatchInputError("Naam-kolom ontbreekt")
+    delimiter = _detect_delimiter(text.strip())
+    reader = csv.reader(StringIO(text, newline=""), delimiter=delimiter)
+    mapping = {}
     raw_rows = []
-    for row_index, values in enumerate(reader, start=2):
+    for values in reader:
         if not values or all(str(value).strip() == "" for value in values):
             continue
-        raw_rows.append((row_index, values))
+        if not mapping:
+            mapping = _map_columns(values)
+            if "naam" not in mapping:
+                raise BatchInputError("Naam-kolom ontbreekt")
+            continue
+        raw_rows.append((len(raw_rows) + 2, values))
+    if not mapping:
+        raise BatchInputError("Bestand is leeg")
     if len(raw_rows) > row_limit:
         raise RowLimitExceeded(f"Bestand bevat meer dan {row_limit} regels")
     return _build_rows(mapping, raw_rows)
@@ -249,6 +264,10 @@ def process_job(db_path: Path, job_id: str, search_fn, row_limit: int = DEFAULT_
         ).fetchall()
         if not pending:
             return
+        base_progress = conn.execute(
+            "SELECT COUNT(*) FROM batch_results WHERE batch_id = ? AND matches_json IS NOT NULL",
+            (job_id,),
+        ).fetchone()[0]
         conn.execute("UPDATE batch_jobs SET status = 'running' WHERE id = ?", (job_id,))
         conn.commit()
         try:
@@ -265,11 +284,11 @@ def process_job(db_path: Path, job_id: str, search_fn, row_limit: int = DEFAULT_
                     "UPDATE batch_results SET matches_json = ? WHERE batch_id = ? AND row_index = ?",
                     (json.dumps(matches, ensure_ascii=False), job_id, item["row_index"]),
                 )
-                conn.execute("UPDATE batch_jobs SET progress = ? WHERE id = ?", (index + 1, job_id))
+                conn.execute("UPDATE batch_jobs SET progress = ? WHERE id = ?", (base_progress + index + 1, job_id))
                 conn.commit()
             conn.execute(
                 "UPDATE batch_jobs SET status = 'done', finished_at = ?, progress = ? WHERE id = ?",
-                (datetime.now(timezone.utc).isoformat(), len(pending), job_id),
+                (datetime.now(timezone.utc).isoformat(), job["total"], job_id),
             )
             conn.commit()
         except Exception as exc:
