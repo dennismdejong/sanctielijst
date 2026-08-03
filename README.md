@@ -51,6 +51,7 @@ Bewaken van namen (need-to-know): je bewaart een naam in de browser en de app me
 - Knop **"Bewaak deze naam"** naast de zoekknop; de naam + criteria blijven in `localStorage` van de browser.
 - De client polt `/api/status` (`data_version`) en her-screent bij elke data-wijziging; nieuwe hits verschijnen als badge + melding.
 - Endpoints: `POST`/`GET`/`DELETE /api/watchlists`, `POST /api/watchlists/{id}/rescan`, `GET /api/watchlists/hits`.
+- Feature toggle: zet `WATCHLIST_ENABLED=1` om bewaken in te schakelen (default: **uit**). Bij uitschakelen geven de watchlist-endpoints 404 en zijn de knop en het paneel in de UI verborgen.
 
 ## OpenSanctions (optioneel)
 

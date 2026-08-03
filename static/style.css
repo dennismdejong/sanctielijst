@@ -22,12 +22,12 @@ body {
 .hero {
   background: var(--eu);
   color: #fff;
-  padding: 2rem 1rem;
+  padding: 1rem 1rem 0.75rem;
   text-align: center;
 }
 
-.hero h1 { margin: 0 0 0.25rem; }
-.hero p { margin: 0; opacity: 0.9; }
+.hero h1 { margin: 0 0 0.25rem; font-size: 1.35rem; }
+.hero p { margin: 0; opacity: 0.9; font-size: 0.9rem; }
 
 .auth-bar {
   display: flex;
@@ -72,23 +72,23 @@ main {
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 1rem 1rem 0.75rem;
+  padding: 0.75rem 0.75rem 0.5rem;
   margin-top: 1rem;
 }
 
 .row { display: flex; gap: 1rem; }
 .row .field { flex: 1; }
-.field { margin-bottom: 0.75rem; }
+.field { margin-bottom: 0.5rem; }
 
-label { display: block; font-weight: 600; margin-bottom: 0.25rem; font-size: 0.9rem; }
+label { display: block; font-weight: 600; margin-bottom: 0.15rem; font-size: 0.85rem; }
 .required { color: var(--bad); }
 
 input, select {
   width: 100%;
-  padding: 0.5rem 0.6rem;
+  padding: 0.4rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
 button {
@@ -96,8 +96,8 @@ button {
   color: #fff;
   border: none;
   border-radius: 6px;
-  padding: 0.6rem 1.4rem;
-  font-size: 1rem;
+  padding: 0.45rem 1.1rem;
+  font-size: 0.95rem;
   cursor: pointer;
 }
 button:hover { opacity: 0.9; }

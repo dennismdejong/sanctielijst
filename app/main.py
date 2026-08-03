@@ -400,6 +400,7 @@ def create_app(
     auth_db = auth.default_auth_db()
     auth_required = os.environ.get("AUTH_REQUIRED", "0").strip().lower() in ("1", "true", "yes")
     local_enabled = os.environ.get("AUTH_LOCAL_ENABLED", "1").strip().lower() not in ("0", "false", "no")
+    watchlist_enabled = os.environ.get("WATCHLIST_ENABLED", "0").strip().lower() in ("1", "true", "yes")
     if auth_required and not auth_secret:
         raise RuntimeError("AUTH_REQUIRED=1 vereist AUTH_SECRET in de omgeving")
     try:
@@ -470,6 +471,7 @@ def create_app(
             "opensanctions_active": opensanctions_active,
             "source": meta.get("status", "unknown"),
             "auth": {"required": auth_required, "methods": methods},
+            "watchlist_enabled": watchlist_enabled,
             "index": {
                 "enabled": state["index_status"] != "disabled",
                 "status": state["index_status"],
@@ -940,6 +942,8 @@ def create_app(
         user: dict | None = Depends(get_current_user),
         payload: dict | None = Body(default=None),
     ):
+        if not watchlist_enabled:
+            raise HTTPException(status_code=404, detail="Watchlists uitgeschakeld")
         _check_roles(user, ("admin", "analist", "viewer"))
         owner = watchlist.get_or_create_key(request, response)
         label = ((payload or {}).get("label") or "").strip()
@@ -953,6 +957,8 @@ def create_app(
         response: Response,
         user: dict | None = Depends(get_current_user),
     ):
+        if not watchlist_enabled:
+            raise HTTPException(status_code=404, detail="Watchlists uitgeschakeld")
         _check_roles(user, ("admin", "analist", "viewer"))
         owner = watchlist.get_or_create_key(request, response)
         return {"watchlists": watchlist.list_watchlists(watchlist.default_watchlist_db(), owner)}
@@ -964,6 +970,8 @@ def create_app(
         watchlist_id: str,
         user: dict | None = Depends(get_current_user),
     ):
+        if not watchlist_enabled:
+            raise HTTPException(status_code=404, detail="Watchlists uitgeschakeld")
         _check_roles(user, ("admin", "analist", "viewer"))
         owner = watchlist.get_or_create_key(request, response)
         if not watchlist.delete_watchlist(watchlist.default_watchlist_db(), owner, watchlist_id):
@@ -980,6 +988,8 @@ def create_app(
         user: dict | None = Depends(get_current_user),
         payload: dict | None = Body(default=None),
     ):
+        if not watchlist_enabled:
+            raise HTTPException(status_code=404, detail="Watchlists uitgeschakeld")
         _check_roles(user, ("admin", "analist", "viewer"))
         owner = watchlist.get_or_create_key(request, response)
         data = payload or {}
@@ -1016,6 +1026,8 @@ def create_app(
         user: dict | None = Depends(get_current_user),
         watchlist_id: str | None = Query(None),
     ):
+        if not watchlist_enabled:
+            raise HTTPException(status_code=404, detail="Watchlists uitgeschakeld")
         _check_roles(user, ("admin", "analist", "viewer"))
         owner = watchlist.get_or_create_key(request, response)
         hits = watchlist.list_hits(watchlist.default_watchlist_db(), owner, watchlist_id=watchlist_id)

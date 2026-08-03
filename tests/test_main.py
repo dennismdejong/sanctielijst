@@ -16,6 +16,7 @@ def _isolate_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AUDIT_DB", str(tmp_path / "audit.sqlite"))
     monkeypatch.setenv("BATCH_DB", str(tmp_path / "batch.sqlite"))
     monkeypatch.setenv("WATCHLIST_DB", str(tmp_path / "watchlists.sqlite"))
+    monkeypatch.setenv("WATCHLIST_ENABLED", "0")
     monkeypatch.delenv("AUDIT_ADMIN_TOKEN", raising=False)
 
 
@@ -1350,7 +1351,8 @@ def test_startup_sweep_marks_orphaned_batch_jobs_error(tmp_path, monkeypatch):
     assert job["finished_at"] is not None
 
 
-def test_watchlist_create_and_list_persist_via_cookie(tmp_path):
+def test_watchlist_create_and_list_persist_via_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     client = TestClient(create_app(entities=ENTITIES))
     resp = client.post("/api/watchlists", json={"label": "Mijn lijst"})
     assert resp.status_code == 200
@@ -1370,6 +1372,7 @@ def test_watchlist_create_and_list_persist_via_cookie(tmp_path):
 def test_watchlist_rescan_produces_hits_and_dedups(tmp_path, monkeypatch):
     from app import matcher
 
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1395,6 +1398,7 @@ def test_watchlist_rescan_produces_hits_and_dedups(tmp_path, monkeypatch):
 def test_watchlist_hits_endpoint_filters_and_audits(tmp_path, monkeypatch):
     import json
 
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1415,7 +1419,8 @@ def test_watchlist_hits_endpoint_filters_and_audits(tmp_path, monkeypatch):
     assert create["query"]["watchlist_id"] == wl["id"]
 
 
-def test_watchlist_owner_isolation(tmp_path):
+def test_watchlist_owner_isolation(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     client_a = TestClient(create_app(entities=ENTITIES))
     client_b = TestClient(create_app(entities=ENTITIES))
     wl = client_a.post("/api/watchlists", json={"label": "geheim van A"}).json()["watchlist"]
@@ -1428,7 +1433,8 @@ def test_watchlist_owner_isolation(tmp_path):
     assert client_a.get("/api/watchlists").json()["watchlists"] == []
 
 
-def test_watchlist_unknown_and_blank_name_errors(tmp_path):
+def test_watchlist_unknown_and_blank_name_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     client = TestClient(create_app(entities=ENTITIES))
     assert client.delete("/api/watchlists/nope").status_code == 404
     assert client.post("/api/watchlists/nope/rescan", json={"name": "Jan"}).status_code == 404
@@ -1441,6 +1447,7 @@ def test_watchlist_unknown_and_blank_name_errors(tmp_path):
 def test_watchlist_need_to_know_watched_name_not_stored(tmp_path, monkeypatch):
     import sqlite3
 
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1478,6 +1485,7 @@ def test_status_data_version_changes_when_data_changes(tmp_path, monkeypatch):
 
 
 def test_watchlist_gating_requires_login_when_required(auth_env, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv("AUTH_REQUIRED", "1")
     _create_local_user(role="viewer")
     client = TestClient(create_app(entities=ENTITIES))
@@ -1488,9 +1496,10 @@ def test_watchlist_gating_requires_login_when_required(auth_env, monkeypatch):
     assert client.post(f"/api/watchlists/{wl['id']}/rescan", json={"name": "Jan"}).status_code == 200
 
 
-def test_watchlist_client_payload_empty_body_label_blank(tmp_path):
+def test_watchlist_client_payload_empty_body_label_blank(tmp_path, monkeypatch):
     import sqlite3
 
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     client = TestClient(create_app(entities=ENTITIES))
     wl = client.post("/api/watchlists", json={}).json()["watchlist"]
     assert wl["label"] == ""
@@ -1505,6 +1514,7 @@ def test_watchlist_client_payload_empty_body_label_blank(tmp_path):
 def test_watchlist_watched_name_absent_after_full_client_cycle(tmp_path, monkeypatch):
     import sqlite3
 
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1527,6 +1537,7 @@ def test_watchlist_watched_name_absent_after_full_client_cycle(tmp_path, monkeyp
 
 
 def test_watchlist_rescan_full_criteria_string_birth_year(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1550,6 +1561,7 @@ def test_watchlist_rescan_full_criteria_string_birth_year(tmp_path, monkeypatch)
 
 
 def test_watchlist_rescan_invalid_birth_year_422(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1574,6 +1586,7 @@ def test_to_watchlist_match_eu_naam_never_query_string():
 
 
 def test_watchlist_eu_hit_naam_is_public_alias_not_query(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_search_db(tmp_path)
     client = TestClient(create_app(entities=ENTITIES, eu_root=tmp_path, pep_root=tmp_path, search_db=tmp_path / "search.sqlite"))
@@ -1599,6 +1612,7 @@ def test_to_watchlist_match_empty_id_returns_none():
 
 
 def test_watchlist_rescan_skips_empty_id_hits(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHLIST_ENABLED", "1")
     monkeypatch.setenv(search_index.INDEX_ENV, "1")
     _write_pep_fixture(tmp_path)
     entity = make_eu_entity()
@@ -1610,3 +1624,12 @@ def test_watchlist_rescan_skips_empty_id_hits(tmp_path, monkeypatch):
     assert resp.status_code == 200, resp.text
     assert resp.json()["new"] == 0
     assert client.get("/api/watchlists/hits").json()["hits"] == []
+
+
+def test_watchlist_disabled_returns_404_and_status_flag(tmp_path):
+    client = TestClient(create_app(entities=ENTITIES))
+    assert client.get("/api/status").json()["watchlist_enabled"] is False
+    assert client.get("/api/watchlists").status_code == 404
+    assert client.post("/api/watchlists", json={}).status_code == 404
+    assert client.post("/api/watchlists/xyz/rescan", json={"name": "Jan"}).status_code == 404
+    assert client.get("/api/watchlists/hits").status_code == 404

@@ -8,6 +8,17 @@ Opmaak gebaseerd op [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/); ve
 
 ## [Niet-gepubliceerd]
 
+## [v1.9.2] - 2026-08-03
+
+### Toegevoegd
+- **Watchlist feature toggle:** `WATCHLIST_ENABLED` (default **uit**). Bij uitschakelen geven de
+  watchlist-endpoints 404 en zijn de knop "Bewaak deze naam" en het watchlist-paneel in de UI
+  verborgen. `/api/status` rapporteert `watchlist_enabled`.
+
+### Gewijzigd
+- Compactere bovenkant: hero- en zoekformulier zijn minder hoog, zodat zoekresultaten direct
+  zichtbaar zijn.
+
 ## [v1.9.1] - 2026-08-03
 
 ### Opgelost

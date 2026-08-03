@@ -14,6 +14,7 @@ let authRequired = false;
 let authMethods = [];
 let lastDataVersion = null;
 let rescanning = false;
+let watchlistEnabled = true;
 
 function escapeHtml(value) {
   return String(value)
@@ -224,6 +225,12 @@ async function loadStatus() {
   }
   try {
     const s = await res.json();
+    watchlistEnabled = s.watchlist_enabled !== false;
+    if (!watchlistEnabled) {
+      watchBtn.hidden = true;
+      const panel = document.getElementById("watchlist-panel");
+      if (panel) panel.hidden = true;
+    }
     if (typeof s.data_version === "number" && (!s.index || s.index.status !== "building")) {
       handleDataVersion(s.data_version);
     }
@@ -609,6 +616,7 @@ async function rescanWatchlists() {
 }
 
 async function handleDataVersion(version) {
+  if (!watchlistEnabled) return;
   if (lastDataVersion === null) {
     lastDataVersion = version;
     return;
@@ -627,7 +635,7 @@ async function init() {
   await loadStatus();
   await loadAuth();
   await maybeShowAuditLink();
-  await loadWatchlists();
+  if (watchlistEnabled) await loadWatchlists();
 }
 
 init();
