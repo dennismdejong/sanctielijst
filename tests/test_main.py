@@ -257,7 +257,7 @@ def test_search_while_building_serves_eu(tmp_path, monkeypatch):
     started = threading.Event()
     release = threading.Event()
 
-    def slow_rebuild(db_path, eu_xml, pep_root):
+    def slow_rebuild(db_path, eu_xml, pep_root, sanctions_root):
         started.set()
         release.wait(5)
 
@@ -889,7 +889,7 @@ def test_build_index_runs_rebuild_in_subprocess(tmp_path, monkeypatch):
     monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
     monkeypatch.setattr(main.subprocess, "run", fake_run)
     state = {"index_status": "building", "index_stats": None, "index_error": None}
-    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path)
+    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path, tmp_path / "sanc")
     assert state["index_status"] == "ready"
     assert state["index_stats"]["total"] == 3
     assert captured["cmd"][0] == _sys.executable
@@ -907,7 +907,7 @@ def test_build_index_subprocess_failure_sets_error(tmp_path, monkeypatch):
     monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
     monkeypatch.setattr(main.subprocess, "run", fake_run)
     state = {"index_status": "building", "index_stats": None, "index_error": None}
-    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path)
+    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path, tmp_path / "sanc")
     assert state["index_status"] == "error"
     assert "boom" in state["index_error"]
 
@@ -924,7 +924,7 @@ def test_status_triggers_rebuild_when_data_newer(tmp_path, monkeypatch):
     called = threading.Event()
     release = threading.Event()
 
-    def counting_rebuild(db_path, eu_xml, pep_root):
+    def counting_rebuild(db_path, eu_xml, pep_root, sanctions_root):
         called.set()
         release.wait(5)
 
@@ -952,7 +952,7 @@ def test_status_no_endless_rebuild_with_future_input_mtime(tmp_path, monkeypatch
     done = threading.Event()
     original_rebuild = search_index.rebuild_index
 
-    def real_rebuild(db_path, eu_xml, pep_root):
+    def real_rebuild(db_path, eu_xml, pep_root, sanctions_root):
         builds.append(1)
         stats = original_rebuild(db_path, eu_xml, pep_root)
         done.set()
@@ -986,7 +986,7 @@ def test_build_index_subprocess_timeout_sets_error(tmp_path, monkeypatch):
     monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
     monkeypatch.setattr(main.subprocess, "run", fake_run)
     state = {"index_status": "building", "index_stats": None, "index_error": None}
-    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path)
+    main._build_index(state, tmp_path / "db.sqlite", tmp_path / "eu.xml", tmp_path, tmp_path / "sanc")
     assert state["index_status"] == "error"
     assert "timeout" in state["index_error"].lower()
     assert "600" in state["index_error"]

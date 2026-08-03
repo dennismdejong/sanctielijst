@@ -38,6 +38,10 @@ def default_pep_root() -> Path:
 PEP_ROOT = default_pep_root()
 
 
+def default_sanctions_root() -> Path:
+    return Path(os.environ.get("SANCTIONS_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data" / "sanctions")))
+
+
 def default_eu_root() -> Path:
     return Path(os.environ.get("EU_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data" / "eu")))
 
@@ -274,12 +278,14 @@ def create_app(
     eu_root: Path | None = None,
     static_dir: Path | None = None,
     pep_root: Path | None = None,
+    sanctions_root: Path | None = None,
     pep_sync: bool | None = None,
     search_db: Path | None = None,
 ) -> FastAPI:
     eu_root = eu_root or default_eu_root()
     static_dir = static_dir or STATIC_DIR
     pep_root = pep_root or default_pep_root()
+    sanctions_root = sanctions_root or default_sanctions_root()
     meta = eu_ingest.load_eu_manifest(eu_root)
     eu_xml = eu_root / eu_ingest.XML_FILENAME
     if entities is None:
@@ -317,10 +323,10 @@ def create_app(
             if result.get("db") is not None:
                 result["db"].close()
         elif pep_sync:
-            _build_index(state, db_path, eu_xml, pep_root)
+            _build_index(state, db_path, eu_xml, pep_root, sanctions_root)
         else:
             state["index_status"] = "building"
-            threading.Thread(target=_build_index, args=(state, db_path, eu_xml, pep_root), daemon=True).start()
+            threading.Thread(target=_build_index, args=(state, db_path, eu_xml, pep_root, sanctions_root), daemon=True).start()
     opensanctions_active = bool(os_api_key)
     auth_secret = os.environ.get("AUTH_SECRET")
     auth_db = auth.default_auth_db()
@@ -377,7 +383,7 @@ def create_app(
             with state["build_lock"]:
                 if state["index_status"] == "ready":
                     state["index_status"] = "building"
-                    threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
+                    threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root, sanctions_root), daemon=True).start()
         meta = state["meta"]
         stats = state["index_stats"] or {}
         methods = []
@@ -422,7 +428,7 @@ def create_app(
                 with state["build_lock"]:
                     if state["index_status"] != "building":
                         state["index_status"] = "building"
-                        threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root), daemon=True).start()
+                        threading.Thread(target=_build_index, args=(state, state["db_path"], eu_xml, pep_root, sanctions_root), daemon=True).start()
             return _status()
         except Exception:
             logger.exception("Verversen mislukt")
