@@ -34,6 +34,49 @@ def _payload(**over):
     return payload
 
 
+def _sanctions_payload(**over):
+    payload = _payload()
+    payload["results"] = [{
+        "source": "sanctie",
+        "score": 95,
+        "entity": {"name": "JOHN DOE", "schema": "Person", "birth_dates": [], "birth_places": [], "citizenships": ["IR"], "topics": ["sanction"]},
+        "sanctie": {"id": "OFAC-1", "url": "https://opensanctions.org/entities/OFAC-1",
+                    "datasets": [{"id": "us_ofac_sdn", "title": "OFAC SDN List", "country": "us", "url": "https://www.opensanctions.org/datasets/us_ofac_sdn/"}],
+                    "matched_name": "JOHN DOE",
+                    "details": [{"feature": "naam", "score": 95, "label": "Naam 95% (via \"JOHN DOE\")"}]},
+        "risk_countries": [{"code": "IR", "lists": ["fatf_blacklist"]}],
+        "eu": None, "pep": None, "opensanctions": None,
+    }]
+    payload.update(over)
+    return payload
+
+
+def test_export_csv_includes_sanctions_source():
+    rows = _export_rows(_sanctions_payload()["results"])
+    row = rows[0]
+    assert row[2] == "Sancties"
+    assert "OFAC SDN List" in row[3]
+    assert "Risicoland IR" in row[4]
+
+
+def test_export_pdf_includes_sanctions_and_risk():
+    data = render_search_pdf(_sanctions_payload())
+    text = _decoded_text(data).decode("latin-1", "replace")
+    assert "Sancties \\(int.\\)" in text
+    assert "OFAC SDN List" in text
+    assert "Risicoland: IR" in text
+
+
+def test_export_pdf_dataversies_meta():
+    payload = _payload()
+    payload["sanctions_meta"] = {"updated_at": "2026-08-03T09:00:00+00:00"}
+    payload["risk_meta"] = {"version": "2026-08", "updated_at": "t"}
+    data = render_search_pdf(payload)
+    text = _decoded_text(data).decode("latin-1", "replace")
+    assert "Sancties-update" in text
+    assert "Risicolanden-versie" in text
+
+
 def test_escape():
     assert _escape("JORGE <FERNÁNDEZ> & \"Co\"") == "JORGE &lt;FERNÁNDEZ&gt; &amp; &quot;Co&quot;"
 

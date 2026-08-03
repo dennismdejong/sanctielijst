@@ -32,7 +32,7 @@ def _query_lines(query: dict) -> list[str]:
 
 def _result_paragraphs(result: dict, styles) -> list:
     source = result.get("source", "?")
-    source_label = {"eu": "EU sanctielijst", "pep": "PEP", "opensanctions": "OpenSanctions"}.get(source, source)
+    source_label = {"eu": "EU sanctielijst", "pep": "PEP", "sanctie": "Sancties (int.)", "opensanctions": "OpenSanctions"}.get(source, source)
     parts = [Paragraph(f"<b>{_escape(result['entity'].get('name', ''))}</b> — score {result.get('score', 0)}/100 ({_escape(source_label)})", styles["h3"])]
     details = (result.get(source) or {}).get("details") or (result.get("pep") or {}).get("details") or []
     for d in details:
@@ -111,6 +111,22 @@ def _result_paragraphs(result: dict, styles) -> list:
             parts.append(Paragraph(f"Bronnen: {_escape(', '.join(os_datasets))}", styles["body"]))
         if os_result.get("url"):
             parts.append(Paragraph(f"Details: {_escape(os_result.get('url'))}", styles["body"]))
+    if result.get("sanctie") is not None:
+        if entity.get("schema"):
+            parts.append(Paragraph(f"Schema: {_escape(entity['schema'])}", styles["body"]))
+        for when in entity.get("birth_dates") or []:
+            parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(when)}", styles["body"]))
+        for where in entity.get("birth_places") or []:
+            parts.append(Paragraph(f"Geboortedata/-plaats: {_escape(where)}", styles["body"]))
+        for country in entity.get("citizenships") or []:
+            parts.append(Paragraph(f"Nationaliteit: {_escape(country)}", styles["body"]))
+        for tag in entity.get("topics") or []:
+            parts.append(Paragraph(f"Risico-tags: {_escape(tag)}", styles["body"]))
+        for ds in result["sanctie"].get("datasets", []):
+            parts.append(Paragraph(f"Bron: {_escape(ds.get('title', ''))} ({_escape((ds.get('country') or '').upper())}) — {_escape(ds.get('url', ''))}", styles["body"]))
+        parts.append(Paragraph(f"Details: {_escape(result['sanctie'].get('url', ''))}", styles["body"]))
+    for flag in result.get("risk_countries") or []:
+        parts.append(Paragraph(f"Risicoland: {_escape(flag.get('code', ''))} ({_escape(', '.join(flag.get('lists') or []))})", styles["body"]))
     parts.append(Spacer(1, 4))
     return parts
 
@@ -142,6 +158,10 @@ def render_search_pdf(payload: dict) -> bytes:
         story.append(Paragraph(f"EU-lijst laatste wijziging: {_escape(meta['last_modified'])}", body))
     pep_meta = payload.get("pep_meta", {}) or {}
     story.append(Paragraph(f"PEP-update: {_escape(pep_meta.get('updated_at', 'onbekend'))}", body))
+    sanctions_meta = payload.get("sanctions_meta", {}) or {}
+    story.append(Paragraph(f"Sancties-update: {_escape(sanctions_meta.get('updated_at', 'onbekend'))}", body))
+    risk_meta = payload.get("risk_meta", {}) or {}
+    story.append(Paragraph(f"Risicolanden-versie: {_escape(risk_meta.get('version', 'onbekend'))}", body))
     story.append(Spacer(1, 4 * mm))
     results = payload.get("results", [])
     capped = len(results) >= payload.get("max_results", 20)
@@ -161,7 +181,7 @@ def render_search_pdf(payload: dict) -> bytes:
 
 
 _EXPORT_HEADERS = ["naam", "score", "bron", "datasets", "match-details", "eu_referentie", "geboortedata", "nationaliteit", "links"]
-_EXPORT_BRONLABELS = {"eu": "EU", "pep": "PEP", "opensanctions": "OpenSanctions"}
+_EXPORT_BRONLABELS = {"eu": "EU", "pep": "PEP", "sanctie": "Sancties", "opensanctions": "OpenSanctions"}
 _EXPORT_COLUMN_WIDTHS = {"A": 28, "B": 8, "C": 14, "D": 30, "E": 42, "F": 18, "G": 26, "H": 18, "I": 46}
 
 
@@ -188,11 +208,19 @@ def _export_rows(results: list[dict]) -> list[list[str]]:
             details = [d.get("label", "") for d in (eu.get("details") or []) if d.get("label")]
             birth_dates = [b.get("date") or b.get("year") for b in (entity.get("birthdates") or []) if isinstance(b, dict)]
             citizenships = [c.get("description") or c.get("iso2") for c in (entity.get("citizenships") or []) if isinstance(c, dict)]
+        elif result.get("sanctie"):
+            details = [d.get("label", "") for d in (result["sanctie"].get("details") or []) if d.get("label")]
+            datasets = [d.get("title") or d.get("id") for d in (result["sanctie"].get("datasets") or []) if d]
+            birth_dates = entity.get("birth_dates") or []
+            citizenships = entity.get("citizenships") or []
+            link = result["sanctie"].get("url", "")
         elif os_result:
             datasets = os_result.get("datasets") or []
             birth_dates = [b.get("date") or b.get("year") for b in (entity.get("birthdates") or []) if isinstance(b, dict)]
             citizenships = [c.get("description") or c.get("iso2") for c in (entity.get("citizenships") or []) if isinstance(c, dict)]
             link = os_result.get("url", "")
+        for flag in result.get("risk_countries") or []:
+            details.append("Risicoland {} ({})".format(flag.get("code", ""), ", ".join(flag.get("lists") or [])))
         rows.append([
             entity.get("name", ""),
             str(result.get("score", 0)),
@@ -256,6 +284,10 @@ def render_batch_pdf(job: dict, results: list[dict], meta: dict) -> bytes:
     story.append(Paragraph(f"EU-lijst generatie: {_escape(meta.get('generation_date', 'onbekend'))}", body))
     if meta.get("last_modified"):
         story.append(Paragraph(f"EU-lijst laatste wijziging: {_escape(meta['last_modified'])}", body))
+    if meta.get("sanctions_updated_at"):
+        story.append(Paragraph(f"Sancties-update: {_escape(meta['sanctions_updated_at'])}", body))
+    if meta.get("risk_version"):
+        story.append(Paragraph(f"Risicolanden-versie: {_escape(meta['risk_version'])}", body))
     story.append(Spacer(1, 4 * mm))
     story.append(Paragraph("<b>Resultaten per regel</b>", styles["h2"]))
     if not results:
