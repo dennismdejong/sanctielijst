@@ -230,9 +230,10 @@ def _load_datasets_meta(pep_root: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _run_rebuild_subprocess(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+def _run_rebuild_subprocess(db_path: Path, eu_xml: Path, pep_root: Path, sanctions_root: Path) -> dict:
     cmd = [sys.executable, "-m", "app.rebuild",
-           "--db", str(db_path), "--eu-xml", str(eu_xml), "--pep-root", str(pep_root)]
+           "--db", str(db_path), "--eu-xml", str(eu_xml), "--pep-root", str(pep_root),
+           "--sanctions-root", str(sanctions_root)]
     try:
         proc = subprocess.run(
             cmd,
@@ -250,15 +251,15 @@ def _run_rebuild_subprocess(db_path: Path, eu_xml: Path, pep_root: Path) -> dict
     return json.loads(proc.stdout)
 
 
-def _run_rebuild(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+def _run_rebuild(db_path: Path, eu_xml: Path, pep_root: Path, sanctions_root: Path) -> dict:
     if os.environ.get("PEP_INDEX_SUBPROCESS", "").strip().lower() in ("1", "true", "yes"):
-        return _run_rebuild_subprocess(db_path, eu_xml, pep_root)
-    return search_index.rebuild_index(db_path, eu_xml, pep_root)
+        return _run_rebuild_subprocess(db_path, eu_xml, pep_root, sanctions_root)
+    return search_index.rebuild_index(db_path, eu_xml, pep_root, sanctions_root)
 
 
-def _build_index(state: dict, db_path: Path, eu_xml: Path, pep_root: Path) -> None:
+def _build_index(state: dict, db_path: Path, eu_xml: Path, pep_root: Path, sanctions_root: Path) -> None:
     try:
-        state["index_stats"] = _run_rebuild(db_path, eu_xml, pep_root)
+        state["index_stats"] = _run_rebuild(db_path, eu_xml, pep_root, sanctions_root)
         state["index_status"] = "ready"
         state["index_error"] = None
     except Exception as exc:

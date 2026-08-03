@@ -11,8 +11,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--eu-xml", required=True, type=Path)
     parser.add_argument("--pep-root", required=True, type=Path)
+    parser.add_argument("--sanctions-root", type=Path, default=None)
     args = parser.parse_args(argv)
-    stats = rebuild_index(args.db, args.eu_xml, args.pep_root)
+    stats = rebuild_index(args.db, args.eu_xml, args.pep_root, args.sanctions_root)
     print(json.dumps(stats), flush=True)
     return 0
 
