@@ -54,7 +54,7 @@ function riskFlagsHtml(item) {
 function euCard(item) {
   const eu = item.eu;
   const entity = item.entity;
-  const chips = eu.details.map((d) => {
+  const chips = (eu.details || []).map((d) => {
     const tone = d.score >= 85 ? "ok" : d.score >= 50 ? "warn" : "bad";
     return chip(d.label, tone);
   }).join("");

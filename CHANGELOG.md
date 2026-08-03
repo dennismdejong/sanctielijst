@@ -8,6 +8,14 @@ Opmaak gebaseerd op [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/); ve
 
 ## [Niet-gepubliceerd]
 
+## [v1.9.1] - 2026-08-03
+
+### Opgelost
+- UI-crash "Cannot read properties of null (reading 'details')" bij zoekresultaten: `euCard` gaat
+  defensief om met ontbrekende detail-chips (overgebleven issue na verouderde browser-cache van
+  `app.js`). Daarnaast worden `app.js` en `style.css` nu cache-busted geladen (`?v=1.9.1`), zodat
+  browsers na een deploy gegarandeerd de nieuwe frontend ophalen.
+
 ## [v1.9.0] - 2026-08-03
 
 ### Toegevoegd
