@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -215,6 +217,14 @@ def build_index(db_path, eu_entities, root):
     return search_index.build_index(db_path, eu_entities, root)
 
 
+def _write_ftm(root, dataset, entities):
+    path = root / dataset / "entities.ftm.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as fh:
+        for e in entities:
+            fh.write(json.dumps(e) + "\n")
+
+
 def _decoded_text(data: bytes) -> bytes:
     import re
     import zlib
@@ -244,6 +254,50 @@ def test_status_index_ready(tmp_path, monkeypatch):
     assert data["index"]["status"] == "ready"
     assert data["index"]["pep_count"] == 1
     assert data["index"]["eu_count"] == 1
+
+
+def test_search_returns_sanctions_result(tmp_path, monkeypatch):
+    import app.risk_countries as rc
+
+    pep_root = tmp_path / "pep"
+    sanc_root = tmp_path / "sanc"
+    pep_root.mkdir()
+    _write_ftm(sanc_root, "us_ofac_sdn", [
+        {"id": "OFAC-1", "caption": "JOHN DOE", "schema": "Person", "target": True, "datasets": ["us_ofac_sdn"],
+         "properties": {"name": ["JOHN DOE"], "citizenship": ["IR"]}},
+    ])
+    (sanc_root / "datasets.json").write_text(json.dumps({
+        "us_ofac_sdn": {"title": "OFAC SDN List", "publisher": "US Treasury", "country": "us", "official": True, "url": "https://example.org/ofac"},
+    }))
+    monkeypatch.setenv("RISK_COUNTRIES", str(tmp_path / "risk.json"))
+    (tmp_path / "risk.json").write_text(json.dumps({
+        "version": "2026-08", "updated_at": "t", "fatf_blacklist": ["IR"], "fatf_greylist": [], "eu_high_risk": [],
+    }))
+    rc.load_risk_countries.cache_clear()
+    db_path = tmp_path / "search.sqlite"
+    search_index.rebuild_index(db_path, tmp_path / "eu.xml", pep_root, sanc_root)
+    client = TestClient(create_app(entities=[], pep_root=pep_root, sanctions_root=sanc_root, search_db=db_path))
+    data = client.get("/api/search", params={"name": "JOHN DOE"}).json()
+    sources = {r["source"] for r in data["results"]}
+    assert "sanctie" in sources
+    first = next(r for r in data["results"] if r["source"] == "sanctie")
+    assert first["sanctie"]["datasets"][0]["title"] == "OFAC SDN List"
+    assert first["risk_countries"] == [{"code": "IR", "lists": ["fatf_blacklist"]}]
+
+
+def test_status_shows_sanctions_and_risk(tmp_path, monkeypatch):
+    import app.risk_countries as rc
+
+    monkeypatch.setenv("RISK_COUNTRIES", str(tmp_path / "risk.json"))
+    (tmp_path / "risk.json").write_text(json.dumps({
+        "version": "2026-08", "updated_at": "t", "fatf_blacklist": ["IR"], "fatf_greylist": [], "eu_high_risk": [],
+    }))
+    rc.load_risk_countries.cache_clear()
+    client = TestClient(create_app(entities=ENTITIES, sanctions_root=tmp_path / "sanc"))
+    data = client.get("/api/status").json()
+    assert data["risk"]["version"] == "2026-08"
+    assert data["risk"]["counts"]["fatf_blacklist"] == 1
+    assert "sanctions_count" in data["index"]
 
 
 def test_search_while_building_serves_eu(tmp_path, monkeypatch):

@@ -20,6 +20,7 @@ from . import auth
 from . import batch
 from . import eu_ingest, ingest, matcher, opensanctions
 from . import pep_ingest
+from . import risk_countries
 from . import search_index
 from . import watchlist
 from .export import render_batch_csv, render_batch_pdf, render_search_csv, render_search_pdf, render_search_xlsx
@@ -40,6 +41,9 @@ PEP_ROOT = default_pep_root()
 
 def default_sanctions_root() -> Path:
     return Path(os.environ.get("SANCTIONS_DATA_DIR", str(Path(__file__).resolve().parent.parent / "data" / "sanctions")))
+
+
+SANCTIONS_ROOT = default_sanctions_root()
 
 
 def default_eu_root() -> Path:
@@ -89,6 +93,9 @@ def _serialize_eu_result(result: dict, query_name: str) -> dict:
             "function": next((a["function"] for a in raw.get("aliases", []) if a.get("function")), ""),
             "remarks": raw.get("remarks", []),
         },
+        "risk_countries": risk_countries.risk_flags(
+            [c["iso2"] for c in raw.get("citizenships", []) if c.get("iso2")]
+        ),
         "eu": {
             "total_score": result["score"],
             "matched_alias": result["matched_name"],
@@ -118,6 +125,9 @@ def _serialize_eu_result_from_dict(result: matcher.EuMatchResult, query_name: st
             "function": next((a["function"] for a in entity["aliases"] if a["function"]), ""),
             "remarks": entity["remarks"],
         },
+        "risk_countries": risk_countries.risk_flags(
+            [c["iso2"] for c in entity["citizenships"] if c.get("iso2")]
+        ),
         "eu": {
             "total_score": result.total_score,
             "matched_alias": result.matched_alias,
@@ -155,6 +165,16 @@ def _pep_enabled(pep_root: Path) -> bool:
     return pep_root.exists()
 
 
+SANCTIONS_INDEX_ENV = "SANCTIONS_INDEX_ENABLED"
+
+
+def _sanctions_enabled(sanctions_root: Path) -> bool:
+    env = os.environ.get(SANCTIONS_INDEX_ENV)
+    if env is not None:
+        return env.strip().lower() not in ("0", "false", "no")
+    return sanctions_root.exists()
+
+
 def _serialize_pep_result(result: dict, datasets_meta: dict) -> dict:
     entity = result["entity"]
     datasets = []
@@ -186,7 +206,50 @@ def _serialize_pep_result(result: dict, datasets_meta: dict) -> dict:
             "matched_name": result["matched_name"],
             "details": result["details"],
         },
+        "risk_countries": risk_countries.risk_flags(
+            [c for c in entity.get("citizenships", []) if isinstance(c, str)]
+        ),
         "eu": None,
+        "opensanctions": None,
+    }
+
+
+def _serialize_sanctions_result(result: dict, datasets_meta: dict) -> dict:
+    entity = result["entity"]
+    datasets = []
+    for ds_id in entity.get("datasets", []):
+        meta = datasets_meta.get(ds_id, {})
+        datasets.append({
+            "id": ds_id,
+            "title": meta.get("title") or ds_id,
+            "country": meta.get("country", ""),
+            "url": f"https://www.opensanctions.org/datasets/{ds_id}/",
+        })
+    return {
+        "source": "sanctie",
+        "score": result["score"],
+        "entity": {
+            "name": entity.get("caption", ""),
+            "schema": entity.get("schema", ""),
+            "birth_dates": entity.get("birth_dates", []),
+            "birth_places": entity.get("birth_places", []),
+            "citizenships": entity.get("citizenships", []),
+            "political": entity.get("political", []),
+            "topics": entity.get("topics", []),
+            "positions": entity.get("positions") or [],
+        },
+        "sanctie": {
+            "id": entity.get("id", ""),
+            "url": f"https://opensanctions.org/entities/{entity.get('id', '')}",
+            "datasets": datasets,
+            "matched_name": result["matched_name"],
+            "details": result["details"],
+        },
+        "risk_countries": risk_countries.risk_flags(
+            [c for c in entity.get("citizenships", []) if isinstance(c, str)]
+        ),
+        "eu": None,
+        "pep": None,
         "opensanctions": None,
     }
 
@@ -207,6 +270,10 @@ def _to_watchlist_match(result: dict) -> dict | None:
     elif source == "pep":
         match_id = (result.get("pep") or {}).get("id") or ""
         datasets = [d.get("id") for d in ((result.get("pep") or {}).get("datasets") or []) if d.get("id")]
+        naam = entity.get("name") or ""
+    elif source == "sanctie":
+        match_id = (result.get("sanctie") or {}).get("id") or ""
+        datasets = [d.get("id") for d in ((result.get("sanctie") or {}).get("datasets") or []) if d.get("id")]
         naam = entity.get("name") or ""
     else:
         match_id = (result.get("opensanctions") or {}).get("id") or ""
@@ -308,12 +375,13 @@ def create_app(
     db_path = search_db if search_db is not None else default_search_db()
     audit_db = audit.default_audit_db()
     audit_admin_token = (os.environ.get("AUDIT_ADMIN_TOKEN") or "").strip()
-    enabled = _pep_enabled(pep_root) or eu_xml.exists()
+    enabled = _pep_enabled(pep_root) or _sanctions_enabled(sanctions_root) or eu_xml.exists()
     state = {"db_path": db_path, "index_status": "disabled", "index_stats": None, "index_error": None, "entities": entities, "meta": meta, "build_lock": threading.Lock()}
     datasets_meta = _load_datasets_meta(pep_root)
+    datasets_meta.update(_load_datasets_meta(sanctions_root))
     if enabled:
         try:
-            result = search_index.ensure_index(db_path, eu_xml, pep_root)
+            result = search_index.ensure_index(db_path, eu_xml, pep_root, sanctions_root)
         except Exception:
             logger.exception("Zoekindex ongeldig; opnieuw opbouwen")
             result = {"db": None, "ready": False, "stats": None}
@@ -379,7 +447,7 @@ def create_app(
         return {"status": "ok"}
 
     def _status() -> dict:
-        if state["index_status"] == "ready" and not search_index.index_fresh(state["db_path"], eu_xml, pep_root):
+        if state["index_status"] == "ready" and not search_index.index_fresh(state["db_path"], eu_xml, pep_root, sanctions_root):
             with state["build_lock"]:
                 if state["index_status"] == "ready":
                     state["index_status"] = "building"
@@ -391,13 +459,14 @@ def create_app(
             methods.append("local")
         if entra_config is not None:
             methods.append("entra")
+        risk_data = risk_countries.load_risk_countries()
         return {
             "version": os.environ.get("APP_VERSION", "dev"),
             "cached_at": meta.get("downloaded_at"),
             "generated_at": meta.get("generation_date"),
             "entity_count": stats.get("total", len(state["entities"])),
             "data_age_hours": _data_age_hours(meta.get("downloaded_at")),
-            "data_version": round(search_index._newest_input_mtime(eu_xml, pep_root), 3),
+            "data_version": round(search_index._newest_input_mtime(eu_xml, pep_root, sanctions_root), 3),
             "opensanctions_active": opensanctions_active,
             "source": meta.get("status", "unknown"),
             "auth": {"required": auth_required, "methods": methods},
@@ -406,8 +475,17 @@ def create_app(
                 "status": state["index_status"],
                 "eu_count": stats.get("eu_count", 0),
                 "pep_count": stats.get("pep_count", 0),
+                "sanctions_count": stats.get("sanctions_count", 0),
                 "source_count": stats.get("source_count", 0),
                 "error": state["index_error"],
+            },
+            "risk": {
+                "version": risk_data["version"],
+                "counts": {
+                    "fatf_blacklist": len(risk_data["fatf_blacklist"]),
+                    "fatf_greylist": len(risk_data["fatf_greylist"]),
+                    "eu_high_risk": len(risk_data["eu_high_risk"]),
+                },
             },
         }
 
@@ -443,8 +521,10 @@ def create_app(
                 for r in search_index.search(db, query.name, query.birth_year, query.nationality, query.birth_place, query.entity_type):
                     if r["entity"]["source"] == "eu":
                         results.append(_serialize_eu_result(r, query.name))
-                    else:
+                    elif r["entity"]["source"] == "pep":
                         results.append(_serialize_pep_result(r, datasets_meta))
+                    else:
+                        results.append(_serialize_sanctions_result(r, datasets_meta))
             finally:
                 db.close()
         elif state["index_status"] == "building":
@@ -714,10 +794,13 @@ def create_app(
         _log_search(request, query, results, warnings, user=audit_user)
         now = datetime.now().astimezone()
         generated = now.strftime("%Y-%m-%d %H:%M %Z")
+        risk_data = risk_countries.load_risk_countries()
         payload = {
             "query": {"name": query.name, "birth_year": query.birth_year, "nationality": query.nationality, "birth_place": query.birth_place, "entity_type": query.entity_type},
             "results": results, "warnings": warnings,
             "meta": state["meta"], "pep_meta": pep_ingest.load_pep_manifest(pep_root),
+            "sanctions_meta": pep_ingest.load_pep_manifest(sanctions_root),
+            "risk_meta": {"version": risk_data["version"], "updated_at": risk_data["updated_at"]},
             "version": os.environ.get("APP_VERSION", "dev"),
             "author": author, "generated_at": generated,
             "threshold": matcher.THRESHOLD, "max_results": matcher.MAX_RESULTS,
@@ -804,7 +887,11 @@ def create_app(
             media_type = "text/csv; charset=utf-8"
             extension = "csv"
         else:
-            content = render_batch_pdf(job, results, state["meta"])
+            risk_data = risk_countries.load_risk_countries()
+            report_meta = dict(state["meta"])
+            report_meta["risk_version"] = risk_data["version"]
+            report_meta["sanctions_updated_at"] = (pep_ingest.load_pep_manifest(sanctions_root) or {}).get("updated_at", "")
+            content = render_batch_pdf(job, results, report_meta)
             media_type = "application/pdf"
             extension = "pdf"
         filename = f"batch-rapport-{datetime.now().astimezone().strftime('%Y-%m-%d')}.{extension}"
