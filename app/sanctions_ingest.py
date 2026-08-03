@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from .pep_ingest import list_collection_datasets, refresh_collection
+from .pep_ingest import fetch_index, list_collection_datasets, refresh_collection
 
 SANCTIONS_COLLECTION = "sanctions"
 EXCLUDE_DATASETS = ("eu_fsf",)
