@@ -88,6 +88,10 @@ handmatig te onderhouden; valideer en voorzie van een timestamp met:
 .venv/bin/python scripts/update_risk_countries.py
 ```
 
+In de container is dit startbestand in de image gebakken op
+`/app/risk_countries.json` (zo ingesteld via `RISK_COUNTRIES`); operators kunnen
+het overschrijven door een eigen bestand op die locatie te mounten.
+
 Een match waarvan de nationaliteit op de lijst staat, krijgt in de UI en de
 rapporten een 'Risicoland'-markering. De versie staat in `/api/status`.
 

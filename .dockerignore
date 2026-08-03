@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .git/
 .env
-data/
+data/*
+!data/risk_countries.json
 docs/
 tests/

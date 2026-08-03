@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 COPY static/ ./static/
+COPY data/risk_countries.json /app/risk_countries.json
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}

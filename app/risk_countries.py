@@ -35,9 +35,9 @@ def load_risk_countries(path: Path | None = None) -> dict:
 def risk_flags(country_codes: list[str], data: dict | None = None) -> list[dict]:
     data = data or load_risk_countries()
     lookup = {
-        "fatf_blacklist": set(data["fatf_blacklist"]),
-        "fatf_greylist": set(data["fatf_greylist"]),
-        "eu_high_risk": set(data["eu_high_risk"]),
+        "fatf_blacklist": set(data.get("fatf_blacklist") or []),
+        "fatf_greylist": set(data.get("fatf_greylist") or []),
+        "eu_high_risk": set(data.get("eu_high_risk") or []),
     }
     flags = []
     for code in country_codes:
@@ -53,7 +53,7 @@ def risk_flags(country_codes: list[str], data: dict | None = None) -> list[dict]
 def validate(data: dict) -> list[str]:
     errors = []
     for key in ("fatf_blacklist", "fatf_greylist", "eu_high_risk"):
-        values = data.get(key) or []
+        values = data.get(key)
         if not isinstance(values, list):
             errors.append(f"{key}: moet een lijst zijn")
             continue

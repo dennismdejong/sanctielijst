@@ -19,6 +19,9 @@ def main(argv=None) -> int:
     except Exception as exc:
         print(f"FATAAL: kan {path} niet lezen: {exc}", file=sys.stderr)
         return 1
+    if not isinstance(data, dict):
+        print(f"FOUT: {path} bevat geen JSON-object", file=sys.stderr)
+        return 1
     errors = risk_countries.validate(data)
     if errors:
         for error in errors:

@@ -12,7 +12,7 @@ browser and are sent per rescan; this module screens them through an injected
       id        stable entity identifier (used for dedup across rescans)
       naam      public name of the matched entity
       score     match score 0-100 (higher is better)
-      bron      source label, e.g. "eu", "pep" or "opensanctions"
+      bron      source label, e.g. "eu", "pep", "sanctie" or "opensanctions"
       datasets  JSON-serialisable list of dataset descriptors
     Matches with ``score`` at or above ``threshold`` are stored; a hit is only
     stored if (watchlist_id, id, score) does not already exist for that

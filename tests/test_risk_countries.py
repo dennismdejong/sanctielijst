@@ -72,3 +72,8 @@ def test_validate_errors():
     assert any("ISO2" in e for e in errs)
     assert any("duplicaat" in e for e in errs)
     assert any("moet een lijst" in e for e in errs)
+
+
+def test_validate_falsy_non_list_is_error():
+    errs = risk_countries.validate({"fatf_blacklist": None, "fatf_greylist": [], "eu_high_risk": []})
+    assert any("moet een lijst" in e for e in errs)

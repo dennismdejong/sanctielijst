@@ -431,3 +431,26 @@ def test_search_typo_still_finds_candidate(tmp_path):
     db = _open(db_path)
     results = search(db, "JORGE FERNANDZ", threshold=0)
     assert results and results[0]["entity"]["id"] == "NK-1"
+
+
+def test_index_fresh_false_when_sanctions_data_newer(tmp_path):
+    db_path = tmp_path / "search.sqlite"
+    eu_xml = tmp_path / "eu.xml"
+    eu_xml.write_bytes(EU_EXPORT)
+    pep_root = tmp_path / "pep"
+    sanc_root = tmp_path / "sanc"
+    write_ftm(sanc_root, "us_ofac_sdn", [
+        {"id": "O1", "caption": "JOHN DOE", "schema": "Person", "target": True, "datasets": ["us_ofac_sdn"],
+         "properties": {"name": ["JOHN DOE"]}},
+    ])
+    build_index(db_path, [], pep_root, sanc_root)
+    assert index_fresh(db_path, eu_xml, pep_root, sanc_root) is True
+    future = time.time() + 1000
+    os.utime(sanc_root / "us_ofac_sdn" / "entities.ftm.json", (future, future))
+    assert index_fresh(db_path, eu_xml, pep_root, sanc_root) is False
+
+
+def test_build_index_skips_missing_sanctions_root(tmp_path):
+    stats = build_index(tmp_path / "search.sqlite", [], tmp_path / "pep", tmp_path / "does-not-exist")
+    assert stats["sanctions_count"] == 0
+    assert stats["total"] == 0

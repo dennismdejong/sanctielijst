@@ -298,6 +298,7 @@ def test_status_shows_sanctions_and_risk(tmp_path, monkeypatch):
     assert data["risk"]["version"] == "2026-08"
     assert data["risk"]["counts"]["fatf_blacklist"] == 1
     assert "sanctions_count" in data["index"]
+    assert data["index"]["sanctions_count"] == 0
 
 
 def test_search_while_building_serves_eu(tmp_path, monkeypatch):
@@ -938,7 +939,7 @@ def test_build_index_runs_rebuild_in_subprocess(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return sp.CompletedProcess(cmd, 0, stdout='{"eu_count": 1, "pep_count": 2, "total": 3, "source_count": 1}', stderr="")
+        return sp.CompletedProcess(cmd, 0, stdout='{"eu_count": 1, "pep_count": 2, "sanctions_count": 0, "total": 3, "source_count": 1}', stderr="")
 
     monkeypatch.setenv("PEP_INDEX_SUBPROCESS", "1")
     monkeypatch.setattr(main.subprocess, "run", fake_run)
@@ -948,6 +949,7 @@ def test_build_index_runs_rebuild_in_subprocess(tmp_path, monkeypatch):
     assert state["index_stats"]["total"] == 3
     assert captured["cmd"][0] == _sys.executable
     assert "app.rebuild" in captured["cmd"]
+    assert "--sanctions-root" in captured["cmd"]
 
 
 def test_build_index_subprocess_failure_sets_error(tmp_path, monkeypatch):

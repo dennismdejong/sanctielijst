@@ -245,7 +245,9 @@ async function loadStatus() {
         parts.push("Index-fout");
       } else if (s.index.enabled) {
         parts.push(`${s.index.pep_count.toLocaleString("nl-NL")} PEP-records`);
-        if (s.index.sanctions_count) parts.push(`${s.index.sanctions_count.toLocaleString("nl-NL")} sanctie-records`);
+        if (s.index.sanctions_count) {
+          parts.push(`${s.index.sanctions_count.toLocaleString("nl-NL")} sanctie-records`);
+        }
       }
     }
     if (s.risk && s.risk.version) {
