@@ -63,6 +63,34 @@ cp .env.example .env
 
 De app leest `OPENSANCTIONS_API_KEY` uit de omgeving of `.env`. Zonder key draait de app volledig op de lokale EU- en PEP-data.
 
+## Internationale sancties (VN, OFAC, VK, NL-terroristenlijst)
+
+Naast de EU-lijst en de PEP-data download de app de volledige OpenSanctions
+**`sanctions`-collectie** (OFAC, VN, VK, Nederlandse nationale terroristenlijst en
+alle overige sanctieregimes; de EU-lijst `eu_fsf` wordt overgeslagen omdat we die
+al via de officiële XML hebben) naar `data/sanctions/`:
+
+```bash
+.venv/bin/python scripts/update_sanctions.py --once
+```
+
+Deze data draait mee in de UI-zoekopdracht, batch-screening en watchlists. Zet
+`SANCTIONS_INDEX_ENABLED=0` om uit te schakelen. In de container verzorgt de service
+`sanctions-downloader` (volume `sanctions-data`) de wekelijkse update.
+
+## Risicolanden (FATF / EU high-risk)
+
+`data/risk_countries.json` (overschrijfbaar met `RISK_COUNTRIES`) bevat de FATF
+zwarte en grijze lijst en de EU high-risk derde landen (ISO2-codes). De lijst is
+handmatig te onderhouden; valideer en voorzie van een timestamp met:
+
+```bash
+.venv/bin/python scripts/update_risk_countries.py
+```
+
+Een match waarvan de nationaliteit op de lijst staat, krijgt in de UI en de
+rapporten een 'Risicoland'-markering. De versie staat in `/api/status`.
+
 ## Login
 
 De app kent eigen gebruikers (gebruikersnaam/wachtwoord) en **Microsoft Entra ID** als Identity Provider. Na succesvolle authenticatie geeft de app een eigen, ondertekende sessie-cookie uit (`session`, 12 uur geldig, HttpOnly, SameSite=lax). Rollen: `admin` (alles, inclusief audit-log en gebruikersbeheer), `analist` (zoeken + exporteren + batch) en `viewer` (alleen zoeken). Een ingelogde gebruiker wordt vastgelegd in de audit-log (`user`-kolom); anonieme zoekopdrachten worden als `null` gelogd.

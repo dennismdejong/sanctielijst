@@ -6,10 +6,12 @@ services:
     environment:
       - PEP_DATA_DIR=/data/pep
       - EU_DATA_DIR=/data/eu
+      - SANCTIONS_DATA_DIR=/data/sanctions
       - OPENSANCTIONS_API_KEY=${OPENSANCTIONS_API_KEY:-}
     volumes:
       - pep-data:/data/pep
       - eu-data:/data/eu
+      - sanctions-data:/data/sanctions
       - search-data:/app/data
     restart: unless-stopped
 
@@ -35,7 +37,19 @@ services:
       - eu-data:/data/eu
     restart: unless-stopped
 
+  sanctions-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile.downloader
+    command: ["scripts/update_sanctions.py", "--interval", "168"]
+    environment:
+      - SANCTIONS_DATA_DIR=/data/sanctions
+    volumes:
+      - sanctions-data:/data/sanctions
+    restart: unless-stopped
+
 volumes:
   pep-data:
   eu-data:
+  sanctions-data:
   search-data:
