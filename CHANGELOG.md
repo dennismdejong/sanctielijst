@@ -8,6 +8,25 @@ Opmaak gebaseerd op [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/); ve
 
 ## [Niet-gepubliceerd]
 
+## [v1.9.0] - 2026-08-03
+
+### Toegevoegd
+- **Internationale sanctie-lijsten (VN, OFAC, VK, NL-terroristenlijst):** lokale screening op de
+  volledige OpenSanctions `sanctions`-collectie (`data/sanctions`, `scripts/update_sanctions.py`).
+  De EU-lijst `eu_fsf` wordt overgeslagen (die hebben we al via de officiële XML). Nieuwe index-bron
+  `sanctie` (schema v4) die automatisch meedraait in UI-zoekopdracht, batch-screening en watchlists.
+  De Nederlandse nationale terroristenlijst (`nl_terrorism_list`) is hiermee ook gedekt.
+- **Risicolanden (FATF / EU high-risk):** `data/risk_countries.json` (FATF zwarte en grijze lijst,
+  EU high-risk derde landen) met validatie via `scripts/update_risk_countries.py`. Matches waarvan de
+  nationaliteit op de lijst staat krijgen een 'Risicoland'-markering in UI en rapporten; de versie
+  staat in `/api/status`.
+- **Sanctions-downloader container-service** en week-cron (gespiegeld van de PEP-downloader).
+
+### Gewijzigd
+- `scripts/update_sanctions.py` voegt de `sanctions`-collectie toe naast EU/PEP; de downloader-image
+  ondersteunt nu ook dit script.
+- Zoekindex-schema v4 (bron `sanctie`); index wordt bij de eerste boot automatisch herbouwd.
+
 ## [v1.8.0] - 2026-08-01
 
 ### Toegevoegd
