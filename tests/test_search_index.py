@@ -364,9 +364,42 @@ def test_load_stats_from_meta(tmp_path):
         {"id": "X1", "caption": "X", "schema": "Person", "target": True, "datasets": ["ds2"], "properties": {"name": ["X"]}},
     ])
     stats = build_index(tmp_path / "search.sqlite", [eu_entity()], tmp_path)
-    assert stats == {"eu_count": 1, "pep_count": 2, "total": 3, "source_count": 2}
+    assert stats == {"eu_count": 1, "pep_count": 2, "sanctions_count": 0, "total": 3, "source_count": 2}
     loaded = load_stats(_open(tmp_path / "search.sqlite"))
     assert loaded == stats
+
+
+def test_stream_sanctions_source(tmp_path):
+    pep_root = tmp_path / "pep"
+    sanc_root = tmp_path / "sanc"
+    write_ftm(pep_root, "ds_pep", [
+        {"id": "P1", "caption": "PEPPER", "schema": "Person", "target": True, "datasets": ["ds_pep"], "properties": {"name": ["PEPPER"]}},
+    ])
+    write_ftm(sanc_root, "us_ofac_sdn", [
+        {"id": "OFAC-1", "caption": "JOHN DOE", "schema": "Person", "target": True, "datasets": ["us_ofac_sdn"],
+         "properties": {"name": ["JOHN DOE"], "citizenship": ["IR"]}},
+        {"id": "OFAC-2", "caption": "ACME", "schema": "Company", "target": True, "datasets": ["us_ofac_sdn"],
+         "properties": {"name": ["ACME"]}},
+    ])
+    stats = build_index(tmp_path / "search.sqlite", [], pep_root, sanc_root)
+    assert stats == {"eu_count": 0, "pep_count": 1, "sanctions_count": 2, "total": 3, "source_count": 2}
+    db = _open(tmp_path / "search.sqlite")
+    rows = db.execute("SELECT id, source FROM entities ORDER BY source, id").fetchall()
+    assert [tuple(r) for r in rows] == [("P1", "pep"), ("OFAC-1", "sanctie"), ("OFAC-2", "sanctie")]
+
+
+def test_search_returns_sanctions_result(tmp_path):
+    pep_root = tmp_path / "pep"
+    sanc_root = tmp_path / "sanc"
+    write_ftm(sanc_root, "us_ofac_sdn", [
+        {"id": "OFAC-1", "caption": "JOHN DOE", "schema": "Person", "target": True, "datasets": ["us_ofac_sdn"],
+         "properties": {"name": ["JOHN DOE"], "citizenship": ["IR"]}},
+    ])
+    build_index(tmp_path / "search.sqlite", [], pep_root, sanc_root)
+    db = _open(tmp_path / "search.sqlite")
+    results = search(db, "JOHN DOE")
+    assert results and results[0]["entity"]["source"] == "sanctie"
+    assert results[0]["entity"]["datasets"] == ["us_ofac_sdn"]
 
 
 def test_rebuild_index(tmp_path):

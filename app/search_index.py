@@ -13,7 +13,7 @@ MAX_RESULTS = 20
 INDEX_ENV = "PEP_INDEX_ENABLED"
 DB_FILENAME = "search.sqlite"
 FTM_FILENAME = "entities.ftm.json"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def default_db_path() -> Path:
@@ -127,8 +127,8 @@ def _insert_eu(db, eu_entities: list[dict]) -> int:
     return len(rows)
 
 
-def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
-    pep_count = 0
+def _stream_ftm(db, root: Path, source: str) -> tuple[int, int]:
+    count = 0
     sources: set[str] = set()
     pos_buf: list[tuple] = []
     occ_buf: list[tuple] = []
@@ -146,7 +146,7 @@ def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
             db.executemany(INSERT_SQL, ent_buf)
             ent_buf = []
 
-    for ftm in sorted(pep_root.glob(f"*/{FTM_FILENAME}")):
+    for ftm in sorted(root.glob(f"*/{FTM_FILENAME}")):
         dataset = ftm.parent.name
         with ftm.open(encoding="utf-8") as fh:
             for line in fh:
@@ -179,7 +179,7 @@ def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
                         names.insert(0, caption)
                     folded = " ".join(tokens(" ".join(names)))
                     ent_buf.append((
-                        "pep",
+                        source,
                         data.get("id", ""),
                         caption,
                         schema,
@@ -195,12 +195,20 @@ def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
                         "",
                         None,
                     ))
-                    pep_count += 1
+                    count += 1
                     sources.add(dataset)
                 if len(pos_buf) + len(occ_buf) + len(ent_buf) >= 20000:
                     flush()
     flush()
-    return pep_count, len(sources)
+    return count, len(sources)
+
+
+def _stream_pep(db, pep_root: Path) -> tuple[int, int]:
+    return _stream_ftm(db, pep_root, "pep")
+
+
+def _stream_sanctions(db, sanctions_root: Path) -> tuple[int, int]:
+    return _stream_ftm(db, sanctions_root, "sanctie")
 
 
 def _fill_positions(db) -> None:
@@ -226,22 +234,30 @@ def _fill_fts(db) -> None:
     db.execute("INSERT INTO names_fts (rowid, names_folded) SELECT rowid, names_folded FROM entities")
 
 
-def _write_meta(db, eu_count: int, pep_count: int, source_count: int, newest_input_mtime: float) -> None:
+def _write_meta(db, eu_count: int, pep_count: int, sanctions_count: int, source_count: int, newest_input_mtime: float) -> None:
     db.executemany(
         "INSERT INTO meta (key, value) VALUES (?,?)",
         [
             ("eu_count", str(eu_count)),
             ("pep_count", str(pep_count)),
+            ("sanctions_count", str(sanctions_count)),
             ("source_count", str(source_count)),
             ("newest_input_mtime", str(newest_input_mtime)),
         ],
     )
 
 
-def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path, *, newest_input_mtime: float | None = None) -> dict:
+def build_index(
+    db_path: Path,
+    eu_entities: list[dict] | None,
+    pep_root: Path,
+    sanctions_root: Path | None = None,
+    *,
+    newest_input_mtime: float | None = None,
+) -> dict:
     eu_entities = eu_entities or []
     if newest_input_mtime is None:
-        newest_input_mtime = _newest_pep_mtime(pep_root)
+        newest_input_mtime = _newest_ftm_mtime(pep_root, sanctions_root)
     new_path = db_path.with_suffix(db_path.suffix + ".new")
     new_path.unlink(missing_ok=True)
     db = None
@@ -254,10 +270,14 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path, *
         db.executescript(SCHEMA)
         db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         eu_count = _insert_eu(db, eu_entities)
-        pep_count, source_count = _stream_pep(db, pep_root)
+        pep_count, pep_sources = _stream_pep(db, pep_root)
+        sanctions_count = 0
+        sanc_sources = 0
+        if sanctions_root is not None and sanctions_root.exists():
+            sanctions_count, sanc_sources = _stream_sanctions(db, sanctions_root)
         _fill_positions(db)
         _fill_fts(db)
-        _write_meta(db, eu_count, pep_count, source_count, newest_input_mtime)
+        _write_meta(db, eu_count, pep_count, sanctions_count, pep_sources + sanc_sources, newest_input_mtime)
         db.execute("DROP TABLE _occupancies")
         db.execute("DROP TABLE _positions")
         db.commit()
@@ -268,7 +288,13 @@ def build_index(db_path: Path, eu_entities: list[dict] | None, pep_root: Path, *
         if db is not None:
             db.close()
         new_path.unlink(missing_ok=True)
-    return {"eu_count": eu_count, "pep_count": pep_count, "total": eu_count + pep_count, "source_count": source_count}
+    return {
+        "eu_count": eu_count,
+        "pep_count": pep_count,
+        "sanctions_count": sanctions_count,
+        "total": eu_count + pep_count + sanctions_count,
+        "source_count": pep_sources + sanc_sources,
+    }
 
 
 def _birth_year(value: str) -> int | None:
@@ -376,24 +402,31 @@ from . import ingest
 from . import matcher
 
 
-def _newest_pep_mtime(pep_root: Path) -> float:
+def _newest_root_mtime(root: Path) -> float:
     newest = 0.0
-    datasets = pep_root / "datasets.json"
+    datasets = root / "datasets.json"
     if datasets.exists():
         newest = max(newest, datasets.stat().st_mtime)
-    for ftm in pep_root.glob(f"*/{FTM_FILENAME}"):
+    for ftm in root.glob(f"*/{FTM_FILENAME}"):
         newest = max(newest, ftm.stat().st_mtime)
     return newest
 
 
-def _newest_input_mtime(eu_xml: Path, pep_root: Path) -> float:
-    newest = _newest_pep_mtime(pep_root)
+def _newest_ftm_mtime(pep_root: Path, sanctions_root: Path | None = None) -> float:
+    newest = _newest_root_mtime(pep_root)
+    if sanctions_root is not None:
+        newest = max(newest, _newest_root_mtime(sanctions_root))
+    return newest
+
+
+def _newest_input_mtime(eu_xml: Path, pep_root: Path, sanctions_root: Path | None = None) -> float:
+    newest = _newest_ftm_mtime(pep_root, sanctions_root)
     if eu_xml.exists():
         newest = max(newest, eu_xml.stat().st_mtime)
     return newest
 
 
-def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path) -> bool:
+def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path, sanctions_root: Path | None = None) -> bool:
     if not db_path.exists():
         return False
     db = None
@@ -407,7 +440,7 @@ def index_fresh(db_path: Path, eu_xml: Path, pep_root: Path) -> bool:
     finally:
         if db is not None:
             db.close()
-    if acknowledged < _newest_input_mtime(eu_xml, pep_root):
+    if acknowledged < _newest_input_mtime(eu_xml, pep_root, sanctions_root):
         return False
     return version >= SCHEMA_VERSION
 
@@ -416,16 +449,18 @@ def load_stats(db) -> dict:
     row = dict(db.execute("SELECT key, value FROM meta").fetchall())
     eu = int(row.get("eu_count", 0))
     pep = int(row.get("pep_count", 0))
+    sanc = int(row.get("sanctions_count", 0))
     return {
         "eu_count": eu,
         "pep_count": pep,
-        "total": eu + pep,
+        "sanctions_count": sanc,
+        "total": eu + pep + sanc,
         "source_count": int(row.get("source_count", 0)),
     }
 
 
-def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
-    if not index_fresh(db_path, eu_xml, pep_root):
+def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path, sanctions_root: Path | None = None) -> dict:
+    if not index_fresh(db_path, eu_xml, pep_root, sanctions_root):
         return {"db": None, "ready": False, "stats": None}
     db = None
     try:
@@ -438,6 +473,12 @@ def ensure_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
     return {"db": db, "ready": True, "stats": stats}
 
 
-def rebuild_index(db_path: Path, eu_xml: Path, pep_root: Path) -> dict:
+def rebuild_index(db_path: Path, eu_xml: Path, pep_root: Path, sanctions_root: Path | None = None) -> dict:
     entities = ingest.parse_export(eu_xml.read_bytes()) if eu_xml.exists() else []
-    return build_index(db_path, entities, pep_root, newest_input_mtime=_newest_input_mtime(eu_xml, pep_root))
+    return build_index(
+        db_path,
+        entities,
+        pep_root,
+        sanctions_root,
+        newest_input_mtime=_newest_input_mtime(eu_xml, pep_root, sanctions_root),
+    )
