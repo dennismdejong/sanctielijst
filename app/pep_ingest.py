@@ -24,7 +24,7 @@ def fetch_index(url: str = INDEX_URL, timeout: int = TIMEOUT) -> dict:
     return resp.json()
 
 
-def list_pep_datasets(index: dict) -> list[dict]:
+def list_collection_datasets(index: dict, collection: str, exclude: tuple[str, ...] = ()) -> list[dict]:
     raw = index.get("datasets") or []
     if isinstance(raw, dict):
         raw = list(raw.values())
@@ -32,18 +32,18 @@ def list_pep_datasets(index: dict) -> list[dict]:
     for ds in raw:
         if not isinstance(ds, dict):
             continue
-        if PEP_COLLECTION not in (ds.get("collections") or []):
+        if collection not in (ds.get("collections") or []):
             continue
         if ds.get("type") != "source":
+            continue
+        name = ds.get("name")
+        if not name or name in exclude:
             continue
         resource = next(
             (r for r in (ds.get("resources") or []) if r.get("name") == RESOURCE_NAME),
             None,
         )
         if resource is None:
-            continue
-        name = ds.get("name")
-        if not name:
             continue
         result.append({
             "name": name,
@@ -52,6 +52,10 @@ def list_pep_datasets(index: dict) -> list[dict]:
         })
     result.sort(key=lambda d: d["name"])
     return result
+
+
+def list_pep_datasets(index: dict) -> list[dict]:
+    return list_collection_datasets(index, PEP_COLLECTION)
 
 
 def _sha1(path: Path) -> str:
@@ -116,17 +120,20 @@ def _source_entry(version: str, resource: dict, status: str, error: str = "") ->
     return entry
 
 
-def refresh_pep(
+def refresh_collection(
     root_dir: Path,
+    collection: str,
+    *,
     index: dict | None = None,
     force: bool = False,
     dry_run: bool = False,
     limit: int | None = None,
     logger: Callable[[str], None] | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> dict:
     if index is None:
         index = fetch_index()
-    datasets = list_pep_datasets(index)
+    datasets = list_collection_datasets(index, collection, exclude=exclude)
     if limit is not None:
         datasets = datasets[:limit]
     manifest = load_pep_manifest(root_dir)
@@ -173,18 +180,42 @@ def refresh_pep(
                 logger(f"{name}: fout ({exc})")
         if not dry_run:
             time.sleep(DOWNLOAD_PAUSE)
-    result = {"updated_at": datetime.now(timezone.utc).isoformat(), "sources": sources, "stats": stats}
+    result = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "collection": collection,
+        "sources": sources,
+        "stats": stats,
+    }
     if not dry_run:
         root_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = root_dir / MANIFEST_FILENAME
         tmp = manifest_path.with_suffix(manifest_path.suffix + f".{uuid.uuid4().hex}.tmp")
         tmp.write_text(json.dumps(result, indent=2))
         os.replace(tmp, manifest_path)
-        write_datasets_meta(index, root_dir)
+        write_datasets_meta(index, root_dir, collection=collection)
     return result
 
 
-def write_datasets_meta(index: dict, root_dir: Path) -> None:
+def refresh_pep(
+    root_dir: Path,
+    index: dict | None = None,
+    force: bool = False,
+    dry_run: bool = False,
+    limit: int | None = None,
+    logger: Callable[[str], None] | None = None,
+) -> dict:
+    return refresh_collection(
+        root_dir,
+        PEP_COLLECTION,
+        index=index,
+        force=force,
+        dry_run=dry_run,
+        limit=limit,
+        logger=logger,
+    )
+
+
+def write_datasets_meta(index: dict, root_dir: Path, *, collection: str = PEP_COLLECTION) -> None:
     raw = index.get("datasets") or []
     if isinstance(raw, dict):
         raw = list(raw.values())
@@ -192,7 +223,7 @@ def write_datasets_meta(index: dict, root_dir: Path) -> None:
     for ds in raw:
         if not isinstance(ds, dict):
             continue
-        if PEP_COLLECTION not in (ds.get("collections") or []):
+        if collection not in (ds.get("collections") or []):
             continue
         name = ds.get("name")
         if not name:

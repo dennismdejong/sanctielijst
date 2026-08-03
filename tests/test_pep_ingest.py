@@ -305,3 +305,39 @@ def test_refresh_pep_limit(tmp_path, monkeypatch):
     manifest = refresh_pep(tmp_path, index=index, limit=1)
     assert manifest["stats"]["total"] == 1
     assert manifest["stats"]["downloaded"] == 1
+
+
+from app.pep_ingest import list_collection_datasets, refresh_collection
+
+
+def test_list_collection_datasets_exclude():
+    datasets = [
+        make_source("us_ofac_sdn", collections=("sanctions",)),
+        make_source("nl_terrorism_list", collections=("sanctions",)),
+        make_source("eu_fsf", collections=("sanctions",)),
+        make_source("al_kuvendi", collections=("peps",)),
+    ]
+    names = [d["name"] for d in list_collection_datasets(make_index(datasets), "sanctions", exclude=("eu_fsf",))]
+    assert names == ["nl_terrorism_list", "us_ofac_sdn"]
+
+
+def test_refresh_collection_writes_collection_key(tmp_path, monkeypatch):
+    data = b"a"
+    index = make_index([make_source("us_ofac_sdn", collections=("sanctions",), version="v1",
+                                   resources=[make_resource(url="https://a", checksum=sha1_bytes(data))])])
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeStreamResp([data]))
+    manifest = refresh_collection(tmp_path, "sanctions", index=index, logger=print)
+    assert manifest["collection"] == "sanctions"
+    assert manifest["stats"] == {"total": 1, "downloaded": 1, "skipped": 0, "failed": 0, "bytes": 100}
+    assert (tmp_path / "us_ofac_sdn" / "entities.ftm.json").read_bytes() == data
+    meta = json.loads((tmp_path / "datasets.json").read_text())
+    assert "us_ofac_sdn" in meta
+
+
+def test_refresh_pep_wrapper_delegates(tmp_path, monkeypatch):
+    data = b"a"
+    index = make_index([make_source("al_kuvendi", version="v1",
+                                   resources=[make_resource(url="https://a", checksum=sha1_bytes(data))])])
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeStreamResp([data]))
+    manifest = refresh_pep(tmp_path, index=index)
+    assert manifest["collection"] == "peps"
