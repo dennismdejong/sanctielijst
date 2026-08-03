@@ -39,8 +39,16 @@ function euStatusLabel(source) {
 function sourceBadge(sources) {
   const parts = [];
   if (sources.includes("eu")) parts.push('<span class="badge badge-eu">EU sanctielijst</span>');
+  if (sources.includes("sanctie")) parts.push('<span class="badge badge-sanctie">Sancties (int.)</span>');
   if (sources.includes("opensanctions")) parts.push('<span class="badge badge-os">OpenSanctions</span>');
   return parts.join(" ");
+}
+
+function riskFlagsHtml(item) {
+  const riskFlags = (item.risk_countries || []).map((f) =>
+    chip(`Risicoland ${f.code} · ${f.lists.map((l) => l.replaceAll("_", " ")).join(", ")}`, "bad")
+  ).join("");
+  return riskFlags ? `<p class="muted">${riskFlags}</p>` : "";
 }
 
 function euCard(item) {
@@ -63,6 +71,7 @@ function euCard(item) {
     });
   const birthLine = births.length ? `<p class="muted">Geboren: ${births.map(escapeHtml).join(" · ")}</p>` : "";
   const natLine = (entity.citizenships || []).length ? `<p class="muted">Nationaliteit: ${entity.citizenships.map((c) => escapeHtml(c.description || c.iso2)).join(", ")}</p>` : "";
+  const riskLine = riskFlagsHtml(item);
   return `
     <article class="card">
       <div class="card-head">
@@ -73,6 +82,7 @@ function euCard(item) {
       <p class="score-line">Totaalscore: <strong>${item.score}</strong>/100 ${chips}</p>
       ${birthLine}
       ${natLine}
+      ${riskLine}
       ${aliases ? `<ul class="aliases">${aliases}</ul>` : ""}
       ${regs ? `<p class="muted">Reglement(en): ${regs}</p>` : ""}
       ${entity.function ? `<p class="muted">Functie: ${escapeHtml(entity.function)}</p>` : ""}
@@ -124,6 +134,7 @@ function pepCard(item) {
   const birthLine = births ? `<p class="muted">Geboren: ${births}</p>` : "";
   const natLine = (entity.citizenships || []).length
     ? `<p class="muted">Nationaliteit: ${entity.citizenships.map((c) => escapeHtml(c.toUpperCase())).join(", ")}</p>` : "";
+  const riskLine = riskFlagsHtml(item);
   return `
     <article class="card card-pep">
       <div class="card-head">
@@ -134,11 +145,45 @@ function pepCard(item) {
       <p class="score-line">Totaalscore: <strong>${item.score}</strong>/100 ${chips}</p>
       ${birthLine}
       ${natLine}
+      ${riskLine}
       ${political}
       ${functiesLine}
       ${topics ? `<p class="muted">Risico-tags: ${topics}</p>` : ""}
       ${dsChips ? `<p class="muted">Bronnen: ${dsChips}</p>` : ""}
       <p class="muted"><a href="${escapeHtml(pep.url)}" target="_blank" rel="noopener">Open op opensanctions.org</a></p>
+    </article>`;
+}
+
+function sanctCard(item) {
+  const sanc = item.sanctie;
+  const entity = item.entity;
+  const chips = (sanc.details || []).map((d) => {
+    const tone = d.score >= 85 ? "ok" : d.score >= 50 ? "warn" : "bad";
+    return chip(d.label, tone);
+  }).join("");
+  const dsChips = (sanc.datasets || []).slice(0, 5).map((d) =>
+    `<a class="chip chip-sanctie" href="${escapeHtml(d.url)}" target="_blank" rel="noopener">${escapeHtml(d.title)}${d.country ? " · " + escapeHtml(d.country.toUpperCase()) : ""}</a>`
+  ).join("");
+  const topics = (entity.topics || []).slice(0, 4).map((t) => chip(t, "warn")).join("");
+  const riskLine = riskFlagsHtml(item);
+  const births = (entity.birth_dates || []).slice(0, 2).map(escapeHtml).join(", ");
+  const birthLine = births ? `<p class="muted">Geboren: ${births}</p>` : "";
+  const natLine = (entity.citizenships || []).length
+    ? `<p class="muted">Nationaliteit: ${entity.citizenships.map((c) => escapeHtml(c.toUpperCase())).join(", ")}</p>` : "";
+  return `
+    <article class="card card-sanctie">
+      <div class="card-head">
+        <h2>${escapeHtml(entity.name)}</h2>
+        <span class="badge badge-sanctie">Sancties (int.)</span>
+      </div>
+      <p class="ref">Schema: ${escapeHtml(entity.schema || "-")}</p>
+      <p class="score-line">Totaalscore: <strong>${item.score}</strong>/100 ${chips}</p>
+      ${birthLine}
+      ${natLine}
+      ${riskLine}
+      ${topics ? `<p class="muted">Risico-tags: ${topics}</p>` : ""}
+      ${dsChips ? `<p class="muted">Bronnen: ${dsChips}</p>` : ""}
+      <p class="muted"><a href="${escapeHtml(sanc.url)}" target="_blank" rel="noopener">Open op opensanctions.org</a></p>
     </article>`;
 }
 
@@ -159,6 +204,7 @@ function renderResults(data) {
     let html;
     if (item.source === "opensanctions") html = osCard(item);
     else if (item.source === "pep") html = pepCard(item);
+    else if (item.source === "sanctie") html = sanctCard(item);
     else html = euCard(item);
     resultsEl.insertAdjacentHTML("beforeend", html);
   });
@@ -199,7 +245,11 @@ async function loadStatus() {
         parts.push("Index-fout");
       } else if (s.index.enabled) {
         parts.push(`${s.index.pep_count.toLocaleString("nl-NL")} PEP-records`);
+        if (s.index.sanctions_count) parts.push(`${s.index.sanctions_count.toLocaleString("nl-NL")} sanctie-records`);
       }
+    }
+    if (s.risk && s.risk.version) {
+      parts.push(`Risicolanden v${s.risk.version}`);
     }
     statusLine.textContent = parts.join(" · ");
     const footer = document.getElementById("footer");

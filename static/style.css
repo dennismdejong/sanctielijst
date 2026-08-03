@@ -226,6 +226,8 @@ button:hover { opacity: 0.9; }
 .chip-bad { background: #ffebe9; color: var(--bad); border-color: var(--bad); }
 .badge-pep { background: #7c3aed; }
 .chip-pep { background: #ede9fe; color: #5b21b6; border-color: #7c3aed; }
+.badge-sanctie { background: #0f766e; }
+.chip-sanctie { background: #ccfbf1; color: #115e59; border-color: #0f766e; }
 
 .empty {
   background: #fff;
