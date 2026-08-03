@@ -47,6 +47,13 @@ def test_health():
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
+def test_index_serves_cache_busted_assets():
+    client = TestClient(create_app(entities=ENTITIES))
+    html = client.get("/").text
+    assert "app.js?v=dev" in html
+    assert "style.css?v=dev" in html
+
+
 def test_status_fields():
     client = TestClient(create_app(entities=ENTITIES))
     data = client.get("/api/status").json()

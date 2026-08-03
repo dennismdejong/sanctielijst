@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -437,7 +437,8 @@ def create_app(
 
     @app.get("/")
     def index():
-        return FileResponse(str(static_dir / "index.html"))
+        html = (static_dir / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(html.replace("@VERSION@", os.environ.get("APP_VERSION", "dev")))
 
     @app.get("/audit")
     def audit_page():

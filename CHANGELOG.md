@@ -8,6 +8,13 @@ Opmaak gebaseerd op [Keep a Changelog](https://keepachangelog.com/nl/1.1.0/); ve
 
 ## [Niet-gepubliceerd]
 
+## [v1.9.3] - 2026-08-03
+
+### Gewijzigd
+- Cache-busting van `app.js`/`style.css` is nu automatisch: de index-pagina injecteert
+  `APP_VERSION` in `?v=...`, zodat elke release gegarandeerd een verse frontend laadt (geen
+  handmatige versie-bump meer in `index.html`).
+
 ## [v1.9.2] - 2026-08-03
 
 ### Toegevoegd
